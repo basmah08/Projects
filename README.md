@@ -1,6 +1,6 @@
 # MSc Projects Portfolio
 
-A collection of coursework projects from my MSc in Actuarial Science / Actuarial Management, covering statistical modelling, machine learning, and portfolio theory applied to healthcare, insurance, finance, and consumer data.
+A collection of coursework projects from my MSc in Actuarial Science with Business Analytics, covering statistical modelling, machine learning, and portfolio theory applied to healthcare, insurance, finance, and consumer data.
 
 ## Projects
 
