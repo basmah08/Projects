@@ -1,0 +1,5 @@
+{
+  "source": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL",
+  "series": "CPIAUCSL (BLS via FRED)",
+  "downloaded_at": "2026-07-04T23:27:23.615461+00:00"
+}
