@@ -1,0 +1,2854 @@
+---
+title:
+  "Shrinkage Estimation in Finance and Insurance: Portfolio Construction and
+  Claim Severity Modelling"
+subtitle: "SMM069 (2025-26) Group Coursework - Group 12"
+author:
+  - "Gaurav Agrawal"
+  - "Benjamin Evans"
+  - "Samyak Jain"
+  - "Basmah Khan"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  bookdown::html_document2:
+    self_contained: true
+    css: style.css
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: hide
+    theme: paper
+    highlight: tango
+    df_print: paged
+    # runtime: shiny
+    pandoc_args:
+      - "--lua-filter=style_code.lua"
+  bookdown::pdf_document2:
+    includes:
+      in_header: preamble.tex
+    pandoc_args:
+      - "--lua-filter=answer.lua"
+      - "--lua-filter=style_code.lua"
+    number_sections: true
+    toc: true
+    latex_engine: xelatex
+    citation_package: natbib
+    keep_tex: true
+# fontsize: 10pt
+bibliography: references.bib
+---
+
+```{=latex}
+\newpage
+```
+
+```{=html}
+<h1>Information</h1>
+
+This R Markdown document was created as part of a group assignment for SMM069 at Bayes Business School, City St George's, University of London in Term 3 2025-26.
+
+```
+
+```{r asthetic-header, include=FALSE, echo=FALSE}
+# ============================================================================ #
+# Key Information ====
+# SMM069 Advanced Predictive Analytics
+# Group Coursework 2025-26
+# Group:        Group 12
+# Authors (in alphabetical order):
+#   - "Gaurav Agrawal"
+#   - "Benjamin Evans"
+#   - "Samyak Jain"
+#   - "Basmah Khan"
+# Professor:    Prof Vali Asimit & Ms Ziwei Chen
+# Institution:  Bayes Business School - City St George's, University of London
+# Date:         09 Jul 2026
+#
+# Description:  Term 3 group project for SMM069 Advanced Predictive Analtyics
+#               (100% of coursework grade - 100% of module grade).
+#
+# Dependencies:
+#   - See below (submitted RMD file so not listed separately here)
+#   
+# Acknowledgements
+#   - Asimit, Chen & Lassance (2026), JBES, doi:10.1080/07350015.2026.2638490
+#       -> mean-vector shrinkage estimators, Coursework 1
+#   - Asimit, Avramescu, Chen, Rivas & Senatore (2025), tech. report,
+#     openaccess.city.ac.uk/id/eprint/35099 
+#       -> shrinkage GLMs (savvyGLM), Coursework 2
+#   - SMM069 (2025-26) course resources by Prof. Vali Asimit & Ms Ziwei Chen.
+#   - Moodle practice files, adapted for our pipelines:
+#       'R_Practice_Section_1_CW_filled.Rmd' (rolling-window backtest)
+#       'R_Practice_Section_2_Part2_CW_Template_Filled.Rmd' (CV loop, metrics)
+#
+# Note to Vali and Ziwei:
+#   We originally planned to submit just an R file exported from this RMD,
+#   hence this 'asthetic header'. We left it in as a legacy artefact after
+#   deciding to submit our code as this single RMD file.
+# ============================================================================ #
+```
+
+```{r setup-knitr, include=FALSE, echo=FALSE}
+# Setup & configuration ====
+#----------------------- Initial setup (knitr settings) -----------------------#
+dir.create("fig", showWarnings = FALSE)
+
+# Defaults common to all outputs
+knitr::opts_chunk$set(
+  echo     = FALSE,
+  message  = FALSE,
+  warning  = FALSE,
+  fig.align = "center",
+  out.width = "100%",
+  fig.path  = "fig/",
+  dpi       = 300
+)
+
+# Output-specific settings
+if (knitr::is_latex_output()) {
+  knitr::opts_chunk$set(
+    fig.width = 6,
+    fig.height = 4,
+    dev = "pdf",
+    fig.pos = "!ht",
+    out.extra = ""
+  )
+} else {
+  knitr::opts_chunk$set(
+    fig.width = 6,
+    fig.height = 4,
+    dev = "svglite"  # or "png"
+  )
+}
+```
+
+```{r setup-qol, include=FALSE, echo=FALSE}
+#----------------------------- Clean environment ------------------------------#
+rm(list = ls()) # Remove all objects
+graphics.off() # Close all graphical devices
+cat("\014") # Clean console
+```
+
+```{r load-dependencies, include=FALSE, echo=FALSE}
+#------------------- Load dependencies / external libraries -------------------#
+# --- Data Manipulation & Plotting ---
+library(tidyverse) # loads dplyr, tidyr, ggplot2, purrr (& others)
+library(patchwork) # for combining multiple plots into one figure
+library(readxl) # reading xlsx GICS sectors
+
+# --- Reporting & Tables ---
+library(kableExtra) # for general tables
+library(DT)         # for HTML interactive data tables
+library(plotly)     # for interactive html plots
+library(pander)     # for writing to pandoc (kept for posterity)
+
+# --- Statistical Modelling & Mathematics ---
+# library(MASS)      # Support functions and datasets for applied statistics
+library(glm2)      # Fitting generalised linear models
+library(glmnet)    # Lasso and elastic-net
+library(splines)   # Regression spline functions
+
+# --- Course-Specific / Custom Packages ---
+library(savvySh)   # Custom coursework package
+library(savvyPR)   # Custom coursework package
+library(savvyGLM)  # Custom coursework package
+
+# Estimator functions ====
+# St_MSh_, D_MSh_, O_LSh_, T_LSh_, Wang_, BOP_, Jorion_estimator
+source("All_eight_shrinkage_estimators.R")
+source("cov1Para.R")
+
+# Global env options ====
+## Setting random seed ----
+group_num <- 12 # seed 12 for group 12 ( ˶ˆᗜˆ˵ )
+set.seed(group_num)
+## disable scientific notation ----
+options(scipen = 999) 
+## set all NA's in tables to dashes ----
+options(knitr.kable.NA = "--") 
+```
+
+```{r custom-functions, include=FALSE, echo=FALSE}
+#---------------------------- Custom QOL functions ----------------------------#
+# BE Note: most of these are legacy functions from previous projects - just
+# kept them here to have all in one contained file.
+#####################################
+# function: format p-values for text
+# Usage (in-line): `r format_p_vals(ad_test_result$p.value)`
+# Usage (console): format_p_vals(ad_test_result$p.value)
+#####################################
+format_p_vals <- function(p) {
+  if (length(p) != 1L || is.na(p)) {
+    stop("Error! p must be a single non-missing value")
+  }
+  if (p > 1) {
+    stop("Error! Value greater than 1")
+  }
+  if (p < 0) {
+    stop("Error! Value less than 0")
+  }
+
+  if (p >= 0.01) {
+    paste0("= ", formatC(p, format = "f", digits = 2))
+  } else if (p >= 0.001) {
+    paste0("= ", formatC(p, format = "f", digits = 3))
+  } else {
+    "< 0.001"
+  }
+}
+#####################################
+# function: format confidence intervals for tables & text
+# Usage (in-line): `r format_interval(el2_ci_normal_95[1], el2_ci_normal_95[2])`
+# Usage (console): format_interval(el2_ci_normal_95[1], el2_ci_normal_95[2])
+#####################################
+format_interval <- function(lower, upper, digits = 3, small_interval = 5L) {
+  paste0(
+    "[",
+    formatC(
+      lower,
+      format = "f",
+      digits = digits,
+      small.interval = small_interval,
+      small.mark = " "
+    ),
+    ", ",
+    formatC(
+      upper,
+      format = "f",
+      digits = digits,
+      small.interval = small_interval,
+      small.mark = " "
+    ),
+    "]"
+  )
+}
+#####################################
+# function: format truncated ellipses
+# Usage (in-line): `r tbi`
+# Usage (console): tbi
+#####################################
+fmt_trunc_ellip <- function(
+  x,
+  digits = 7,
+  ellip = "...",
+  tol = 1e-12,
+  trim_zeros_if_exact = TRUE
+) {
+  out <- rep(NA_character_, length(x))
+  ok <- is.finite(x)
+  scale <- 10^digits
+  xt <- trunc(x[ok] * scale) / scale
+  s <- formatC(xt, format = "f", digits = digits)
+  add <- abs(x[ok] - xt) > tol * pmax(1, abs(x[ok]))
+  if (trim_zeros_if_exact) {
+    s_trim <- sub("0+$", "", s) # drop trailing zeros
+    s_trim <- sub("\\.$", "", s_trim) # drop trailing decimal point
+  } else {
+    s_trim <- s
+  }
+  out[ok] <- ifelse(add, paste0(s, ellip), s_trim)
+  out[is.na(x)] <- NA_character_
+  out
+}
+#####################################
+# function: function to format 6dp numbers with a space after the 3rd decimal
+# digit
+# Usage (in-line): TBI
+# Usage (console): TBI
+#####################################
+format_spaced_6dp <- function(x) {
+  # Format to 6 decimal places
+  s <- sprintf("%.6f", x)
+  # Insert space between the first 3 and last 3 decimal digits
+  sub("(\\.[0-9]{3})([0-9]{3})$", "\\1 \\2", s)
+}
+#####################################
+# function: compact inline number formatter
+# Usage (in-line): `r fmt(2.32320)`
+fmt <- function(x, d = 2) {
+  formatC(x, format = "f", digits = d, big.mark = ",")
+}
+```
+
+# Coursework 1 {-}
+
+# Shrinkage estimation for portfolio construction {#coursework1}
+
+```{r a-data-load, include=FALSE}
+no_companies <- 100
+# read in data (stored in data folder)
+ret_raw <- read.csv(                    
+  "data/DA441_weekly_returns.csv",
+  stringsAsFactors = FALSE, 
+  check.names = FALSE
+)
+rf_raw <- read.csv("data/risk_free_rate_weekly.csv", stringsAsFactors = FALSE)
+gics <- as.data.frame(read_excel("data/DA441_GICS_Sectors.xlsx"))
+# format dates
+ret_raw$Date <- as.Date(as.character(ret_raw$Date), format = "%Y%m%d") 
+rf_raw$Date  <- as.Date(as.character(rf_raw$Date),  format = "%Y%m%d")
+```
+
+```{r a-data-prep, include=FALSE}
+## (i) convert risk-free rate from percentage -> decimal  ----
+rf_dec    <- rf_raw 
+rf_dec$RF <- rf_raw$RF / 100
+# align risk free rate to the return dates by date
+dat <- merge(ret_raw, rf_dec[, c("Date", "RF")], by = "Date")
+dates <- dat$Date
+# original tickers, kept for GICS
+ticker_cols <- setdiff(colnames(ret_raw), "Date")
+returns_all <- as.matrix(dat[, ticker_cols])
+rf <- dat$RF
+# gets our specific tickers
+set.seed(group_num)
+selected <- sample(ticker_cols, no_companies)
+returns100 <- returns_all[, selected]
+
+## (ii) Weekly excess returns: r_excess[t,i] = r[t,i] - rf[t] ----
+# sweep() subtracts the rf vector across rows (clearer than returns100 - rf)
+excess_returns <- sweep(returns100, 1, rf, FUN = "-")
+```
+
+```{r a-params-estimators, include=FALSE}
+# rolling-window parameters
+training_weeks  <- 156
+testing_weeks   <- 4
+step_weeks      <- 4
+omega           <- 1      # risk aversion gamma = 1
+
+# BE note: n_assets should always equal no_companies as data comes pre-cleaned
+n_total   <- nrow(excess_returns)
+n_windows <- floor((n_total - training_weeks - testing_weeks) / step_weeks) + 1
+n_weeks   <- n_total
+n_assets  <- ncol(excess_returns)
+np_ratio  <- training_weeks / n_assets
+cat("Total number of rolling windows:", n_windows, "\n")
+
+# Mean-vector estimators
+# Check this* (each takes a returns matrix: rows = weeks, cols = assets).
+mean_estimators <- list(
+  Sample = function(X) colMeans(X),
+  StMSh = St_MSh_estimator,
+  DMSh = D_MSh_estimator,
+  OLSh = O_LSh_estimator,
+  TLSh = T_LSh_estimator,
+  Wang = Wang_estimator,
+  BOP = BOP_estimator,
+  Jorion = Jorion_estimator
+)
+# Mirroring paper ordering from Asimit et al. 2026, Table 3
+# proposed estimators -> sample -> benchmarks
+est_order <- c(
+  "StMSh", "DMSh", "OLSh", "TLSh", "Sample", "Wang", "BOP", "Jorion"
+)
+stopifnot(setequal(est_order, names(mean_estimators)))
+# Single covariance estimator for the whole analysis
+cov_fun <- cov1Para
+
+# annualised Sharpe ratio from a weekly excess-return series
+# > (mean/sd) * sqrt(52).
+# > catches if assets in 4-week window have zero volatility
+# > would get `Inf` or `NaN` -> this changes these values to NA()
+ann_sharpe <- function(r, scale = 52) {
+  r <- as.numeric(r)
+  s <- sd(r)
+  if (is.na(s) || s == 0) {
+    return(NA_real_)
+  }
+  (mean(r) / s) * sqrt(scale)
+}
+```
+
+```{r a-cov-diagnostic, include=TRUE}
+# conditioning diagnostic
+# cov1Para vs sample covariance
+# mean estimator and porfolio construction held constant & just sigma changes
+
+run_diag <- function(X, cov_estimator, mean_estimators,
+                     training_weeks, testing_weeks, step_weeks) {
+  n_windows <- floor((nrow(X) - training_weeks - testing_weeks) / step_weeks) + 1
+  conds <- numeric(n_windows)
+  Wl <- vector("list", n_windows)
+  Rl <- vector("list", n_windows)
+  for (k in seq_len(n_windows)) {
+    tr_start <- 1 + (k - 1) * step_weeks
+    tr_end <- tr_start + training_weeks - 1
+    te_start <- tr_end + 1
+    te_end <- te_start + testing_weeks - 1
+    train_X <- X[tr_start:tr_end, , drop = FALSE]
+    test_X <- X[te_start:te_end, , drop = FALSE]
+
+    Sigma <- cov_estimator(train_X)
+    ev <- eigen(Sigma, symmetric = TRUE, only.values = TRUE)$values
+    conds[k] <- max(ev) / min(ev)
+    Sigma_inv <- solve(Sigma)
+
+    W <- sapply(mean_estimators, function(f) {
+      z <- as.vector(Sigma_inv %*% f(train_X))
+      z / sum(z) # tangency weights
+    })
+    colnames(W) <- names(mean_estimators)
+    Wl[[k]] <- W
+    Rl[[k]] <- test_X %*% W
+  }
+  gross <- rowMeans(sapply(Wl, function(W) colSums(abs(W))))
+  turn <- rowMeans(sapply(2:n_windows, function(k) colSums(abs(Wl[[k]] - Wl[[k - 1]]))))
+  oos <- apply(do.call(rbind, Rl), 2, ann_sharpe)
+  list(
+    cond_mean = mean(conds), cond_med = median(conds),
+    tab = data.frame(
+      GrossLev = gross, Turnover = turn, OOS_Sharpe = oos,
+      row.names = names(mean_estimators)
+    )
+  )
+}
+diag_shrink <- run_diag(
+  excess_returns, cov1Para, mean_estimators,
+  training_weeks, testing_weeks, step_weeks
+)
+diag_sample <- run_diag(
+  excess_returns, function(X) cov(X), mean_estimators,
+  training_weeks, testing_weeks, step_weeks
+)
+
+cond_mean_shrink <- diag_shrink$cond_mean
+cond_mean_sample <- diag_sample$cond_mean
+cond_med_shrink <- diag_shrink$cond_med
+cond_med_sample <- diag_sample$cond_med
+cond_ratio_mean <- cond_mean_sample / cond_mean_shrink
+
+cmp <- merge(diag_shrink$tab, diag_sample$tab,
+  by = "row.names",
+  suffixes = c("_cov1Para", "_sample")
+)
+rownames(cmp) <- cmp$Row.names
+cmp$Row.names <- NULL
+# cond_tab <- cmp[names(mean_estimators), ]
+cond_tab <- cmp[est_order, ]
+```
+
+```{r a-rolling, include=FALSE}
+# build mean variance and tangency portfolio weights per estimator (& EWP)
+# > Score each by annualised Sharpe ratio over 4 week test window
+# > Then roll forward across sample (described in labs)
+eval_window <- function(train_X, test_X, cov_fun, mean_estimators, omega = 1) {
+  Sigma_inv <- solve(cov_fun(train_X))
+  out <- numeric(0)
+  for (nm in names(mean_estimators)) {
+    mu <- mean_estimators[[nm]](train_X)
+    # Sigma^{-1} mu
+    z <- as.vector(Sigma_inv %*% mu)
+    # mean-variance (gamma = 1) <-> un-normalised
+    w_mv <- (1 / omega) * z
+    # tangency -> weights sum to 1
+    w_tp <- z / sum(z)
+    out[paste0("MV_", nm)] <- ann_sharpe(test_X %*% w_mv)
+    out[paste0("TP_", nm)] <- ann_sharpe(test_X %*% w_tp)
+  }
+  w_ew <- rep(1 / ncol(train_X), ncol(train_X))
+  # equal-weight benchmark
+  out["EWP"] <- ann_sharpe(test_X %*% w_ew)
+  out
+}
+
+sr_list <- vector("list", n_windows)
+test_start_dates <- as.Date(rep(NA, n_windows))
+for (k in seq_len(n_windows)) {
+  tr_start <- 1 + (k - 1) * step_weeks
+  tr_end <- tr_start + training_weeks - 1
+  te_start <- tr_end + 1
+  te_end <- te_start + testing_weeks - 1
+  train_X <- excess_returns[tr_start:tr_end, , drop = FALSE]
+  test_X <- excess_returns[te_start:te_end, , drop = FALSE]
+  sr_list[[k]] <- eval_window(train_X, test_X,
+    cov_fun         = cov_fun,
+    mean_estimators = mean_estimators,
+    omega           = omega
+  )
+  test_start_dates[k] <- dates[te_start]
+}
+sr_mat <- do.call(rbind, sr_list)
+sr_df <- data.frame(TestStart = test_start_dates, sr_mat, check.names = FALSE)
+```
+
+```{r a-summaries-metrics, include=FALSE}
+# Sub-period masks (assigned by test-window start date)
+fc_lo <- as.Date("2008-10-06")
+fc_hi <- as.Date("2011-08-03") # Financial Crisis
+pd_lo <- as.Date("2020-02-26")
+pd_hi <- as.Date("2023-12-29") # Pandemic
+
+masks <- list(
+  Full            = rep(TRUE, nrow(sr_df)),
+  FinancialCrisis = sr_df$TestStart >= fc_lo & sr_df$TestStart <= fc_hi,
+  Pandemic        = sr_df$TestStart >= pd_lo & sr_df$TestStart <= pd_hi
+)
+n_full <- sum(masks$Full)
+n_fc <- sum(masks$FinancialCrisis)
+n_pd <- sum(masks$Pandemic)
+
+strategy_cols <- setdiff(colnames(sr_df), "TestStart")
+summarise_period <- function(df, mask, cols) {
+  sub <- df[mask, cols, drop = FALSE]
+  data.frame(
+    Mean = sapply(sub, mean, na.rm = TRUE),
+    SD = sapply(sub, sd, na.rm = TRUE)
+  )
+}
+summary_full <- summarise_period(sr_df, masks$Full, strategy_cols)
+summary_fc <- summarise_period(sr_df, masks$FinancialCrisis, strategy_cols)
+summary_pd <- summarise_period(sr_df, masks$Pandemic, strategy_cols)
+
+cat(
+  "Windows -> Full:",
+  sum(masks$Full),
+  "| Financial Crisis:",
+  sum(masks$FinancialCrisis),
+  "| Pandemic:",
+  sum(masks$Pandemic),
+  "\n"
+)
+
+summary_full$Strategy <- rownames(summary_full)
+summary_fc$Strategy <- rownames(summary_fc)
+summary_pd$Strategy <- rownames(summary_pd)
+combined_summary <- summary_full |>
+  dplyr::left_join(summary_fc, by = "Strategy", suffix = c("_full", "_fc")) |>
+  dplyr::left_join(summary_pd, by = "Strategy") |>
+  dplyr::rename(Mean_pd = Mean, SD_pd = SD) |>
+  dplyr::relocate("Strategy")
+
+row_order_hl <- c("EWP", paste0("MV_", est_order), paste0("TP_", est_order))
+combined_summary <- combined_summary[
+  match(row_order_hl, combined_summary$Strategy),
+]
+
+# per window mean-variance vs tagency portfolio equality (up to sign)
+# & St-MSh == Sample check
+mv <- as.matrix(sr_df[, grep("^MV_", names(sr_df))])
+tp <- as.matrix(sr_df[, grep("^TP_", names(sr_df))])
+mvtp_maxdiff <- max(abs(abs(mv) - abs(tp)), na.rm = TRUE)
+stm_check <- isTRUE(all.equal(sr_df$MV_Sample, sr_df$MV_StMSh))
+
+# ========================================================================== #
+# scale sensitive out of sample metrics
+# -> created as companion to the headline table
+oos_metrics <- function(X, mean_estimators, cov_fun,
+                        training_weeks, testing_weeks, step_weeks, omega = 1) {
+  n_windows <- floor((nrow(X) - training_weeks - testing_weeks) / step_weeks) + 1
+  est_names <- names(mean_estimators)
+  strat <- c(paste0("MV_", est_names), paste0("TP_", est_names), "EWP")
+  p <- ncol(X)
+
+  # [1] Assets (p), [2] Strategy Name, [3] Rolling Window Step
+  W_arr <- array(NA_real_,
+    dim = c(p, length(strat), n_windows),
+    dimnames = list(NULL, strat, NULL)
+  )
+  R_arr <- array(NA_real_,
+    dim = c(testing_weeks, length(strat), n_windows),
+    dimnames = list(NULL, strat, NULL)
+  )
+  sumz <- matrix(NA_real_, n_windows, length(est_names),
+    dimnames = list(NULL, est_names)
+  )
+  for (k in seq_len(n_windows)) {
+    tr_start <- 1 + (k - 1) * step_weeks
+    tr_end <- tr_start + training_weeks - 1
+    te_start <- tr_end + 1
+    te_end <- te_start + testing_weeks - 1
+    train_X <- X[tr_start:tr_end, , drop = FALSE]
+    test_X <- X[te_start:te_end, , drop = FALSE]
+    Sigma_inv <- solve(cov_fun(train_X))
+
+    # Z = \Sigma^{-1} \mu
+    Z <- sapply(mean_estimators, function(f) as.vector(Sigma_inv %*% f(train_X))) # p x 8
+    sumz[k, ] <- colSums(Z)
+
+    # W_mv = Z / \omega  |  W_tp = Z / (\mathbf{1}^T Z)
+    W <- cbind(
+      Z / omega, # MV (gamma = 1), unnormalised
+      sweep(Z, 2, colSums(Z), "/"), # TP, weights sum to 1
+      rep(1 / p, p)
+    ) # EWP
+    colnames(W) <- strat
+    W_arr[, , k] <- W
+    R_arr[, , k] <- test_X %*% W
+  }
+  list(W = W_arr, R = R_arr, sumz = sumz, strat = strat)
+}
+summarise_oos <- function(res, mask = rep(TRUE, dim(res$R)[3]), omega = 1, w_stat = mean) {
+  W <- res$W[, , mask, drop = FALSE]
+  R <- apply(res$R[, , mask, drop = FALSE], 2, c) # stitched weekly series
+  ann_ret <- 52 * colMeans(R)
+  ann_vol <- sqrt(52) * apply(R, 2, sd)
+  sharpe <- apply(R, 2, ann_sharpe)
+  ce <- ann_ret - (omega / 2) * ann_vol^2 # realised certainty-equivalent
+  gross <- apply(apply(abs(W), c(2, 3), sum), 1, w_stat)
+  maxw <- apply(apply(abs(W), c(2, 3), max), 1, w_stat)
+  nW <- dim(W)[3]
+  turn <- if (nW > 1) {
+    dW <- abs(W[, , -1, drop = FALSE] - W[, , -nW, drop = FALSE])
+    apply(apply(dW, c(2, 3), sum), 1, w_stat)
+  } else {
+    rep(NA_real_, length(res$strat))
+  }
+  est_names <- colnames(res$sumz)
+  flips <- setNames(rep(NA_real_, length(res$strat)), res$strat)
+  flips[paste0("TP_", est_names)] <- colSums(res$sumz[mask, , drop = FALSE] < 0)
+  data.frame(
+    AnnExRet = ann_ret, AnnVol = ann_vol, Sharpe = sharpe, CE = ce,
+    GrossLev = gross, MaxWt = maxw, Turnover = turn,
+    FlipWin = flips[res$strat], row.names = res$strat
+  )
+}
+res_metrics <- oos_metrics(excess_returns, mean_estimators, cov_fun,
+  training_weeks, testing_weeks, step_weeks,
+  omega = omega
+)
+tab_full <- summarise_oos(res_metrics, masks$Full, omega = omega)
+row_order <- c("EWP", paste0("MV_", est_order), paste0("TP_", est_order))
+tab_full  <- tab_full[row_order, ]
+
+# ========================================================================== #
+# Debugging / tracability check: 1'Sigma^{-1}mu ~ 0
+# > If the sum of unnormalised weights approaches zero the tangency portfolio
+# > weights will explode to infinity (^ massive leverage).
+# > This gets the worst-case window for the DMSh estimator to explore later
+k_bad <- which.min(abs(res_metrics$sumz[, "DMSh"]))
+sumz_bad <- res_metrics$sumz[k_bad, "DMSh"]
+lev_bad <- sum(abs(res_metrics$W[, "TP_DMSh", k_bad]))
+date_bad <- sr_df$TestStart[k_bad]
+min_sumz <- apply(abs(res_metrics$sumz), 2, min)
+
+# ========================================================================== #
+# GICS (Global Industry Classification Standard) sector composition of
+# sampled companies
+id_col <- "DA441_column_name"
+sector_col <- "GICS Sector Name"
+
+sel_gics <- gics[gics[[id_col]] %in% selected, ]
+sector_tab <- as.data.frame(table(sel_gics[[sector_col]]))
+nrow(sel_gics) # check: should be 100 (Y)
+
+colnames(sector_tab) <- c("Sector", "Count")
+sector_tab <- sector_tab[order(-sector_tab$Count), ]
+
+# BE note: quick calc to get number and % of GICS companies used in part A
+# writeup
+get_sec <- function(s) {
+  v <- sector_tab$Count[sector_tab$Sector == s]
+  if (length(v)) v else 0L
+}
+n_fin <- get_sec("Financials")
+n_it <- get_sec("Information Technology")
+n_comms <- get_sec("Communication Services")
+pct_it_comms <- round(100 * (n_it + n_comms) / sum(sector_tab$Count))
+```
+
+```{r a-inout-compute, include=FALSE}
+# In-sample vs out-of-sample tangency Sharpe, per window per estimator
+in_out_sample <- function(X, dates, mean_estimators, cov_fun,
+                          training_weeks, testing_weeks, step_weeks) {
+  n_windows <- floor((nrow(X) - training_weeks - testing_weeks) / step_weeks) + 1
+  rows <- list()
+  i <- 1
+  for (k in seq_len(n_windows)) {
+    tr_start <- 1 + (k - 1) * step_weeks
+    tr_end <- tr_start + training_weeks - 1
+    te_start <- tr_end + 1
+    te_end <- te_start + testing_weeks - 1
+    train_X <- X[tr_start:tr_end, , drop = FALSE]
+    test_X <- X[te_start:te_end, , drop = FALSE]
+    Sigma_inv <- solve(cov_fun(train_X))
+    for (nm in names(mean_estimators)) {
+      z <- as.vector(Sigma_inv %*% mean_estimators[[nm]](train_X))
+      w <- z / sum(z)
+      rows[[i]] <- data.frame(
+        window = k, Date = dates[te_start], estimator = nm,
+        denom = sum(z),
+        IS = ann_sharpe(train_X %*% w),
+        OOS = ann_sharpe(test_X %*% w)
+      )
+      i <- i + 1
+    }
+  }
+  out <- do.call(rbind, rows)
+  out$flip <- out$denom < 0
+  out
+}
+diag_df <- in_out_sample(
+  excess_returns, dates, mean_estimators, cov_fun,
+  training_weeks, testing_weeks, step_weeks
+)
+diag_df$estimator <- factor(diag_df$estimator, levels = est_order)
+inout_summary <- diag_df |>
+  dplyr::group_by(estimator) |>
+  dplyr::summarise(
+    `Windows flipped (%)` = mean(flip) * 100,
+    `OOS Sharpe (flipped)` = mean(OOS[flip], na.rm = TRUE),
+    `OOS Sharpe (not flipped)` = mean(OOS[!flip], na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(match(estimator, est_order))
+```
+
+---
+
+## Data preprocessing {#a1}
+
+The risk-free rate was first converted from a percentage to a decimal (i) before
+weekly excess returns were computed (ii) using Eq. \@ref(eq:excess-returns).
+\begin{equation}
+r^{\text{excess}}_{i,t} = r_{i,t} - r_{f,t}
+(\#eq:excess-returns)
+\end{equation}
+The risk-free rate was aligned to the return dates, and the excess returns were
+calculated using the `sweep()` function to subtract the risk-free vector across
+the rows. The resulting excess return matrix covers `r n_weeks` weekly
+observations for `r n_assets` companies, from `r as.character(min(dates))` to 
+`r as.character(max(dates))`. In **R**, both of these steps were implemented
+using:
+
+```{r a-data-prep-show, ref.label="a-data-prep", echo=TRUE, eval=FALSE}
+```
+
+## Selection of estimation models {#a2}
+
+Portfolios were constructed using all eight mean-vector estimators: the sample 
+mean, the four distribution-free shrinkage estimators of @Asimit15062026 
+(`St-MSh`, `D-MSh`, `O-LSh` and `T-LSh`), and the three established benchmarks 
+(`Wang`, `BOP` and `Jorion`). Please see Appendix
+\@ref(apx-method-mean-vec-estimators) for formal definitions of each estimator.
+
+Every mean estimator is paired with the one-parameter linear shrinkage estimator of @Ledoit2004365, `cov1Para`, rather than
+the sample covariance. `cov1Para` pulls the sample covariance $S$ toward a
+diagonal matrix $\mu I$ whose common variance
+$\mu = \tfrac{1}{p}\operatorname{tr}(S)$ is the average sample variance. 
+The strength of the pull is set automatically, with no tuning parameter, to minimise the covariance's mean-squared error (Appendix \@ref(apx-method-mean-vec-estimators)).
+The result is always positive-definite and well-conditioned. It is also
+distribution-free, needing only i.i.d. observations with finite fourth moments,
+the same assumptions that underlie the mean estimators of @Asimit15062026. The
+whole pipeline therefore rests on one consistent set of assumptions.
+
+The issue with the sample covariance is conditioning. Each
+training window gives $n = `r training_weeks`$ weekly observations on
+$p = `r n_assets`$ assets, a ratio of $n/p \approx `r fmt(np_ratio, 2)`$.
+Because $n > p$ the sample covariance can be inverted, but it is
+ill-conditioned. Its smallest eigenvalues are biased toward zero, so inverting
+the covariance amplifies the directions estimated least reliably
+[@Ledoit2004365], producing extreme, unstable weights whose errors accumulate
+out of sample.
+
+Both the problem and the fix are visible directly in our data. Averaged across
+the `r n_windows` windows (described in more detail in \@ref(a3)), the condition
+number of the sample covariance is
+`r fmt(cond_mean_sample, 0)` compared to `r fmt(cond_mean_shrink, 0)` under
+`cov1Para` - a `r round(cond_ratio_mean)`-fold improvement (medians
+`r fmt(cond_med_sample, 0)` vs `r fmt(cond_med_shrink, 0)`). 
+With the mean estimators and portfolio rule held fixed, the better conditioning 
+feeds straight into implementability. For the `O-LSh` tangency portfolio, 
+average gross leverage falls from 
+`r fmt(cond_tab["OLSh", "GrossLev_sample"], 1)` to
+`r fmt(cond_tab["OLSh", "GrossLev_cov1Para"], 1)` and monthly turnover from
+`r fmt(cond_tab["OLSh", "Turnover_sample"], 1)` to
+`r fmt(cond_tab["OLSh", "Turnover_cov1Para"], 1)`, with comparable reductions
+for every estimator (Appendix \@ref(apx-cond)). 
+
+## Portfolio construction and rolling-window setup {#a3}
+
+For each window and each mean estimator, two portfolios are built: a
+mean-variance portfolio with risk aversion $\gamma = 1$, giving the unnormalised
+weights $w_{MV}$, and a tangency portfolio, the same vector rescaled to sum to
+one, $w_{TP}$
+$$
+w_{MV} = \Sigma^{-1}\hat\mu \, ,
+\qquad
+w_{TP} = \frac{\Sigma^{-1}\hat\mu}{\mathbf 1^\top\Sigma^{-1}\hat\mu}
+$$
+The equal-weight portfolio (EWP) is included as a
+benchmark. In our code, $\gamma$ is denoted `omega`. Throughout, $\Sigma$ is the
+`cov1Para` estimate selected in \@ref(a2), and $\hat\mu$ is estimated on the
+training window only, so no test-window information enters the weights.
+
+The rolling structure uses a 156-week (3-year) training window, a 4-week
+(1-month) testing window, and a 4-week step. Because the step equals the testing
+length, successive test windows are contiguous and non-overlapping. Over the 
+`r n_weeks`-week sample this gives 
+$$
+\lfloor(`r n_weeks` - 156 - 4)/4\rfloor + 1 = `r n_windows`
+$$
+out-of-sample windows, leaving the final 
+`r n_weeks - 156 - testing_weeks * n_windows` weeks uncovered by any test window. The implementation of this rolling structure in **R** was:
+
+```{=latex}
+\newpage
+```
+
+```{r rolling-show, ref.label="a-rolling", echo=TRUE, eval=FALSE}
+```
+
+
+## Portfolio performance {#a4}
+
+For every test window and every portfolio the annualised Sharpe ratio was
+calculated by taking the mean of the four weekly out-of-sample excess returns,
+dividing by their standard deviation and multiplying by $\sqrt{52}$. Each window
+is assigned to a market environment by its test-window start date.
+Of the `r n_windows` windows, `r n_fc` fall in the financial-crisis sub-period
+(`r format(fc_lo, "%d/%m/%Y")`-`r format(fc_hi, "%d/%m/%Y")`) and `r n_pd` in
+the pandemic sub-period 
+(`r format(pd_lo, "%d/%m/%Y")`-`r format(pd_hi, "%d/%m/%Y")`).
+These boundary dates are structural breakpoints identified by the Bai-Perron
+test on the S&P500 return series and the sub-periods correspond to statistically
+identified market regimes rather than arbitrary calendar choices. 
+
+Table \@ref(tab:a-headline-sharpe) shows the mean and standard deviation of the
+per-window Sharpe ratios over the full period and the two sub-periods. Each
+per-window Sharpe ratio is estimated from only four weekly returns, so it is
+inherently noisy. Cross-window standard deviations range from
+approximately `r fmt(min(summary_full$SD), 1)` to 
+`r fmt(max(summary_full$SD), 1)` over the full period, in 
+every case several times the magnitude of the corresponding mean
+(approximately `r fmt(min(summary_full$Mean), 2)` to 
+`r fmt(max(summary_full$Mean), 2)`). This dispersion is a property of the
+per-window definition. A companion summary for a Sharpe ratio computed on the
+stitched out-of-sample series is described in Appendix \@ref(apx-scale).
+
+Note that the Sample and `St-MSh` rows in Table \@ref(tab:a-headline-sharpe) are
+identical in every period. This is a structural property of the Sharpe ratio. `St-MSh` scales the sample mean by a positive constant
+that the Sharpe ratio cannot detect. This is explored further in Appendix
+\@ref(apx-stmsh-vs-sample) (the same identity is also present in Table 3 of
+@Asimit15062026).
+
+```{r a-headline-sharpe}
+hl <- combined_summary
+hl$Strategy <- sub("^(MV|TP)_", "", hl$Strategy)
+n_est <- length(est_order)
+
+kable(hl,
+  digits = 4, booktabs = TRUE, row.names = FALSE,
+  caption = "Mean and standard deviation of the per-window annualised Sharpe ratios. The best mean and standard deviation in each environment are highlighted. Because the Sharpe ratio is invariant to positive rescaling of the weights, St-MSh reproduces the Sample rows exactly, and the mean-variance and tangency portfolios coincide except in net-short windows where the sign flips.",
+  linesep = "",
+  col.names = c("Strategy", "Mean", "SD", "Mean", "SD", "Mean", "SD")
+) |>
+  kable_styling(
+    full_width = FALSE, position = "center", 
+    latex_options = "hold_position"
+  ) |>
+  add_header_above(c(" " = 1, "Full period" = 2, "Financial crisis" = 2, "Pandemic" = 2)) |>
+  pack_rows(index = c(
+    "Benchmark" = 1,
+    "Mean-variance portfolio" = n_est,
+    "Tangency portfolio" = n_est
+  )) |>
+  # adds latex spacing (just for pdf)
+  row_spec(c(5, 13), extra_latex_after = "\\addlinespace") |>
+  column_spec(2,
+    bold = combined_summary$Mean_full == max(combined_summary$Mean_full, na.rm = TRUE),
+    color = ifelse(combined_summary$Mean_full == max(combined_summary$Mean_full, na.rm = TRUE), "#1b9e77", "black")
+  ) |>
+  column_spec(4,
+    bold = combined_summary$Mean_fc == max(combined_summary$Mean_fc, na.rm = TRUE),
+    color = ifelse(combined_summary$Mean_fc == max(combined_summary$Mean_fc, na.rm = TRUE), "#1b9e77", "black")
+  ) |>
+  column_spec(6,
+    bold = combined_summary$Mean_pd == max(combined_summary$Mean_pd, na.rm = TRUE),
+    color = ifelse(combined_summary$Mean_pd == max(combined_summary$Mean_pd, na.rm = TRUE), "#1b9e77", "black")
+  ) |>
+  column_spec(3,
+    bold = combined_summary$SD_full == min(combined_summary$SD_full, na.rm = TRUE),
+    color = ifelse(combined_summary$SD_full == min(combined_summary$SD_full, na.rm = TRUE), "#1b9e77", "black")
+  ) |>
+  column_spec(5,
+    bold = combined_summary$SD_fc == min(combined_summary$SD_fc, na.rm = TRUE),
+    color = ifelse(combined_summary$SD_fc == min(combined_summary$SD_fc, na.rm = TRUE), "#1b9e77", "black")
+  ) |>
+  column_spec(7,
+    bold = combined_summary$SD_pd == min(combined_summary$SD_pd, na.rm = TRUE),
+    color = ifelse(combined_summary$SD_pd == min(combined_summary$SD_pd, na.rm = TRUE), "#1b9e77", "black")
+  )
+```
+
+
+## Interpretation of results and final report {#a5}
+
+<!-- BE note: was quite brutal here to get this down -->
+<!-- - Aimed for ~1/2 to 1 page max -->
+
+Optimised portfolios are only as reliable as the expected returns they are built
+on, and those estimates carry substantial estimation error. This report tests
+whether shrinkage methods designed to temper that noise deliver better
+risk-adjusted returns than the classical sample mean for an investor rebalancing
+monthly over two decades [@Asimit15062026]. Using weekly excess returns for
+`r no_companies` S&P 500 companies 
+(`r format(min(dates), "%B %Y")`-`r format(max(dates), "%B %Y")`), 
+eight ways of estimating expected returns were compared, each paired with the
+`cov1Para` covariance estimator [@Ledoit2004365] and benchmarked against an
+equal-weight (1/N) portfolio. Every method was evaluated with a rolling window
+that mirrors live practice, fitting on the previous three years, testing on the
+next unseen month, then advancing, giving `r n_windows` out-of-sample tests with
+no look-ahead bias. Performance was summarised by the annualised Sharpe ratio
+over the full period, the 2008 financial crisis, and the COVID-19 pandemic
+(Table \@ref(tab:a-headline-sharpe)).
+
+The mean-variance and tangency portfolios hold the same positions at different
+scales (tangency rescales the weights to sum to one) so within any window
+their Sharpe ratios are identical bar a possible sign flip (the per-window
+magnitudes agree to within `r formatC(mvtp_maxdiff, format = "e", digits = 1)`).
+The two coincide in every window where the portfolio is not net-short, which
+covers almost the entire pandemic. Over other periods the sign flip lifts the
+tangency full-period mean above mean-variance for the stronger estimators
+(`TP_OLSh`
+`r fmt(summary_full["TP_OLSh", "Mean"], 4)` versus `MV_OLSh`
+`r fmt(summary_full["MV_OLSh", "Mean"], 4)`). The economically meaningful
+difference is cost, not Sharpe ratio. Because tangency weights sum to one,
+leverage and turnover are far lower (for `O-LSh`, average leverage falls from
+`r fmt(tab_full["MV_OLSh", "GrossLev"], 1)` to
+`r fmt(tab_full["TP_OLSh", "GrossLev"], 1)`), making tangency preferable in
+practice. The exception is when the normaliser nears zero and weights explode
+(`r format(date_bad, "%d %B %Y")` drives `TP_DMSh` leverage to roughly
+`r fmt(lev_bad, 0)`; Appendix \@ref(apx-pathology)).
+
+Across estimators, the standout result is how hard the naïve benchmark is to
+beat. The equal-weight portfolio posts the highest full-period Sharpe
+(`r fmt(summary_full["EWP", "Mean"], 4)`) and lowest full-period dispersion,
+overtaken only once, by `TP_OLSh` in the financial crisis
+(`r fmt(summary_fc["TP_OLSh", "Mean"], 4)` versus
+`r fmt(summary_fc["EWP", "Mean"], 4)`), consistent with the 1/N result of
+@DeMiguel2009. Among optimised methods only mean shrinkage keeps up. Under the tangency construction, `O-LSh` and `D-MSh` roughly double the sample mean's full-period Sharpe ratio 
+(`r fmt(summary_full["TP_OLSh", "Mean"], 4)` and
+`r fmt(summary_full["TP_DMSh", "Mean"], 4)` versus 
+`r fmt(summary_full["TP_Sample", "Mean"], 4)`), with `D-MSh` the most consistent across regimes and the best optimised pandemic performer 
+(`r fmt(summary_pd["TP_DMSh", "Mean"], 4)`). 
+The raw sample mean turns negative in the financial crisis 
+(`r fmt(summary_fc["MV_Sample", "Mean"], 4)`) through error-maximisation,
+`St-MSh` reproduces the sample rows exactly (Appendix
+\@ref(apx-stmsh-vs-sample)), `Jorion` is too volatile to trust
+(SD `r fmt(summary_full["MV_Jorion", "SD"], 2)`, rising to
+`r fmt(summary_pd["TP_Jorion", "SD"], 2)` in the pandemic), and `BOP` is the
+weakest overall, with the most net-short flips (`r tab_full["TP_BOP",
+"FlipWin"]` windows). The uniformly weak pandemic figures are partly due to our
+group's sector draw (Figure \@ref(fig:gics-fig); full company list in Appendix
+\@ref(apx-stocks)): Financials is the largest single exposure (`r n_fin` of
+100), and while Information Technology sits mid-pack (`r n_it`), the tech-led
+sectors that drove the post-2020 rally are thin as a bloc with IT and
+Communication Services (`r n_comms`) together only accounting for 
+`r pct_it_comms`% of the universe. No estimator can manufacture exposure that 
+isn't there and an equal-weighted portfolio sidesteps this problem by never guessing. 
+For our 100 stocks, `O-LSh` and `D-MSh` are worth using over the raw sample
+mean, but once leverage and turnover are counted, a plain equal-weighted
+portfolio remains a strong, cheap benchmark the optimisers struggle to beat out
+of sample (Appendix \@ref(apx-scale)).
+
+
+```{r gics-table, eval=FALSE}
+# BE note: not loaded as opted for the bar chart below instead
+# Kept for posterity
+kable(sector_tab,
+  row.names = FALSE, booktabs = TRUE,
+  caption = "GICS sector composition of our 100 sampled companies (Group 12)."
+) |>
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+```{r gics-fig, fig.cap="GICS sector composition of the 100 sampled companies (Group 12), shown as a horizontal bar chart with sectors ordered by company count. Financials is the largest exposure, while Communication Services and the wider tech-led bloc are comparatively underweight.", fig.width=5.5, fig.height=2.8}
+ggplot(sector_tab, aes(x = Count, y = reorder(Sector, Count))) +
+  geom_col(fill = "#0072B2") +
+  labs(x = "Companies", y = NULL) +
+  scale_x_continuous(limits = c(0, 15), breaks = seq(0, 15, by = 5)) +
+  theme_minimal() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{=latex}
+\newpage
+```
+
+# Coursework 2 {-}
+
+# Shrinkage Generalised Linear Models for Insurance Claim Severity Estimation {#coursework2}
+
+```{=latex}
+% Custom shortened header to avoid overlap
+\sectionmark{Shrinkage GLMs for Insurance Claim Severity Estimation}
+```
+
+
+```{r b-setup, include=FALSE}
+# BE note: seed already set above.
+#          > also moved libraries up to pre-loading shared with part A
+
+# shared fitting config
+n_folds <- 5
+control_list <- list(maxit = 250, epsilon = 1e-6, trace = FALSE)
+family_type <- Gamma(link = "log")
+
+# Model formula and the columns that get standardised. Defined here -> used by:
+# > the CV engine
+# > the B3 in-sample fit
+# > appendix sensitivity checks
+glm_formula <- Severity ~ BonusMalus_Log + VehPower_Log + Density_Log +
+  DrivAge_Sp1 + DrivAge_Sp2 + DrivAge_Sp3 +
+  VehAge_Sp1 + VehAge_Sp2 + VehAge_Sp3 +
+  VehGas + TE_Region + TE_Area + TE_VehBrand
+scale_cols <- c(
+  "BonusMalus_Log", "VehPower_Log", "Density_Log",
+  "DrivAge_Sp1", "DrivAge_Sp2", "DrivAge_Sp3",
+  "VehAge_Sp1", "VehAge_Sp2", "VehAge_Sp3",
+  "TE_Region", "TE_Area", "TE_VehBrand"
+)
+
+# put model names in order
+model_names <- c("GLM2", "RR", "EN", "QIS", "LW", "SR", "GSR", "St", "DSh")
+```
+
+```{r b-data-prep, include=FALSE}
+# Read in data (stored in relative data/ folder)
+freq <- read.csv("data/freMTPL2freq.csv")
+sev <- read.csv("data/freMTPL2sev.csv")
+# Aggregate severity by policy ID (& merge with frequency features)
+sev_agg <- aggregate(ClaimAmount ~ IDpol, data = sev, FUN = sum)
+data <- merge(freq, sev_agg, by = "IDpol")
+# Filter for exactly 1 claim and positive claim amount
+data_sev <- data[data$ClaimNb == 1 & data$ClaimAmount > 0, ]
+
+# Group seed set before the single random draw of 1,000 rows just to be safe
+# (avoiding part A rng leakage)
+set.seed(group_num)
+# Randomly sample 1000 rows
+data_sev <- data_sev[sample(nrow(data_sev), 1000), ]
+# for generality (= ClaimAmount)
+data_sev$Severity <- data_sev$ClaimAmount / data_sev$ClaimNb
+
+# Squash heavy tails and bound implausible values.
+# > defaults:
+#   VehPower capped at 9
+#   BonusMalus at 150
+# sensitivity to both caps is tested in the appendix (apx-b-caps)
+data_sev$VehPower_Log <- log(pmax(pmin(data_sev$VehPower, 9), 1))
+data_sev$Density_Log <- log(pmax(data_sev$Density, 1))
+data_sev$BonusMalus_Log <- log(pmin(data_sev$BonusMalus, 150))
+# Quick check -> should be 1000
+n_pol <- nrow(data_sev)
+```
+
+```{r b-metric-helpers, include=FALSE}
+# OOS evaluation metrics ====
+# BE note: removed return function (slightly faster if used in loop)
+calc_rmse_win <- function(actual, predicted, cap_val) {
+  sqrt(mean((pmin(actual, cap_val) - pmin(predicted, cap_val))^2))
+}
+calc_mae_win <- function(actual, predicted, cap_val) {
+  mean(abs(pmin(actual, cap_val) - pmin(predicted, cap_val)))
+}
+
+WeightedGini <- function(actual, weights, predicted) {
+  df <- data.frame(actual = actual, weights = weights, predicted = predicted)
+  df <- df[order(df$predicted, decreasing = TRUE), ]
+  df$random <- cumsum(df$weights / sum(df$weights))
+  totalPositive <- sum(df$actual * df$weights)
+  df$cumPosFound <- cumsum(df$actual * df$weights)
+  df$Lorentz <- df$cumPosFound / totalPositive
+  n <- nrow(df)
+  gini <- sum(df$Lorentz[-n] * df$random[-1]) - sum(df$Lorentz[-1] * df$random[-n])
+  # implicity return
+  gini
+}
+NormalisedWeightedGini <- function(actual, weights, predicted) {
+  model_gini <- WeightedGini(actual, weights, predicted)
+  max_gini <- WeightedGini(actual, weights, actual)
+  # implicity return
+  model_gini / max_gini
+}
+```
+
+```{r b-feature-engine, include=FALSE}
+# Leakage-safe feature construction ====
+# Used for appendix
+# function encapsulating the pipeline used inside every CV fold
+#   splines fitted on training rows only
+#   smoothed leave-one-out target encoding learned on training rows only
+#   standardisation frozen at training means/sds.
+# With test = NULL it prepares the full dataset for the in-sample analysis (B3) and for the appendix sensitivity checks, using the same construction.
+build_features <- function(train, test = NULL,
+                           veh_cap = 9, bm_cap = 150,
+                           driv_df = 3, veh_df = 3,
+                           k_smooth = 20, standardise = TRUE) {
+  # reapply caps from the raw columns so the appendix can vary them
+  for (d in list(quote(train), quote(test))) {
+    dd <- eval(d)
+    if (is.null(dd)) next
+    dd$VehPower_Log <- log(pmax(pmin(dd$VehPower, veh_cap), 1))
+    dd$Density_Log <- log(pmax(dd$Density, 1))
+    dd$BonusMalus_Log <- log(pmin(dd$BonusMalus, bm_cap))
+    if (identical(d, quote(train))) train <- dd else test <- dd
+  }
+
+  # Natural cubic splines fitted strictly on the training data
+  driv_splines <- ns(train$DrivAge, df = driv_df)
+  veh_splines <- ns(train$VehAge, df = veh_df)
+  for (j in seq_len(driv_df)) train[[paste0("DrivAge_Sp", j)]] <- driv_splines[, j]
+  for (j in seq_len(veh_df)) train[[paste0("VehAge_Sp", j)]] <- veh_splines[, j]
+  if (!is.null(test)) {
+    tdb <- predict(driv_splines, test$DrivAge)
+    tvb <- predict(veh_splines, test$VehAge)
+    for (j in seq_len(driv_df)) test[[paste0("DrivAge_Sp", j)]] <- tdb[, j]
+    for (j in seq_len(veh_df)) test[[paste0("VehAge_Sp", j)]] <- tvb[, j]
+  }
+
+  # actuarial (credibility-smoothed) target encoding with leave-one-out on
+  # the training rows, and the full training dictionary projected onto test
+  te_cols <- c("Region", "Area", "VehBrand")
+  global_mean_train <- sum(train$ClaimAmount) / sum(train$ClaimNb)
+  for (col in te_cols) {
+    group_amt <- tapply(train$ClaimAmount, train[[col]], sum)
+    group_clm <- tapply(train$ClaimNb, train[[col]], sum)
+    grp_idx <- as.character(train[[col]])
+    loo_amt <- group_amt[grp_idx] - train$ClaimAmount
+    loo_clm <- group_clm[grp_idx] - train$ClaimNb
+    lambda_train <- loo_clm / (loo_clm + k_smooth)
+    mu_train <- ifelse(loo_clm > 0, loo_amt / loo_clm, global_mean_train)
+    train[[paste0("TE_", col)]] <-
+      lambda_train * mu_train + (1 - lambda_train) * global_mean_train
+    if (!is.null(test)) {
+      full_lambda <- group_clm / (group_clm + k_smooth)
+      full_mu <- group_amt / group_clm
+      dict <- full_lambda * full_mu + (1 - full_lambda) * global_mean_train
+      te <- dict[as.character(test[[col]])]
+      te[is.na(te)] <- global_mean_train # unseen levels -> global baseline
+      test[[paste0("TE_", col)]] <- te
+    }
+  }
+
+  # Standardisation, frozen at training-data parameters
+  # Not strictly required for glm2/savvyGLM/glmnet -> see (apx-b-scaling)
+  # retained for posterity
+  sc <- intersect(scale_cols, names(train))
+  if (standardise) {
+    tm <- colMeans(train[, sc])
+    ts <- apply(train[, sc], 2, sd)
+    ts[ts == 0] <- 1
+    for (col in sc) {
+      train[[col]] <- (train[[col]] - tm[col]) / ts[col]
+      if (!is.null(test)) test[[col]] <- (test[[col]] - tm[col]) / ts[col]
+    }
+  }
+  list(train = train, test = test)
+}
+
+# Single dispatcher: model name -> coefficient vector aligned to columns of X
+# Used by B3 and the appendix so the best model is picked in one place
+fit_model_coefs <- function(model, X, y, w) {
+  if (model == "GLM2") {
+    m <- glm.fit2(
+      x = X, y = y, weights = w,
+      family = family_type, control = control_list
+    )
+    m$coefficients
+  } else if (model %in% c("RR", "EN")) {
+    m <- cv.glmnet(X[, -1], y,
+      weights = w, family = Gamma(link = "log"),
+      alpha = ifelse(model == "RR", 0, 0.5),
+      nlambda = 50, nfolds = 5
+    )
+    as.vector(coef(m, s = "lambda.min"))
+  } else {
+    m <- savvy_glm.fit2(
+      x = X, y = y, weights = w, family = family_type,
+      model_class = model, control = control_list
+    )
+    m$coefficients
+  }
+}
+```
+
+```{r b-cv-function, include=FALSE}
+# Cross-validation engine (B1) ====
+# BE note: cv_seed_base following tutorial code
+cv_seed_base <- 123
+
+run_single_iteration <- function(i) {
+  repeat_idx <- floor((i - 1) / n_folds) + 1 # 1..100 across the 500 runs
+  fold_idx   <- ((i - 1) %% n_folds) + 1     # cycles 1..5 within each repeat
+
+  # Reshuffle FOLD LABELS only (repeat r uses seed cv_seed_base + r for all
+  # five of its runs); the 1,000 sampled rows themselves are never redrawn.
+  set.seed(cv_seed_base + repeat_idx)
+  folds <- sample(rep(1:n_folds, length.out = nrow(data_sev)))
+  test_idx <- which(folds == fold_idx)
+
+  fe <- build_features(data_sev[-test_idx, ], data_sev[test_idx, ])
+  train_data <- fe$train
+  test_data  <- fe$test
+
+  X_train <- model.matrix(glm_formula, train_data)
+  X_test  <- model.matrix(glm_formula, test_data)
+  y_train <- train_data$Severity; y_test <- test_data$Severity
+  w_train <- train_data$ClaimNb;  w_test <- test_data$ClaimNb
+
+  # Winsorisation caps learned from the TRAINING response only
+  cap_99 <- quantile(y_train, probs = 0.99, na.rm = TRUE)
+  cap_95 <- quantile(y_train, probs = 0.95, na.rm = TRUE)
+
+  eval_model <- function(coefs) {
+    if (all(is.na(coefs))) return(rep(NA_real_, 10))
+    safe_coefs <- ifelse(is.na(coefs), 0, coefs)
+    pred_test <- exp(as.numeric(X_test %*% safe_coefs))
+    c(sqrt(mean((y_test - pred_test)^2)),
+      mean(abs(y_test - pred_test)),
+      calc_rmse_win(y_test, pred_test, cap_99),
+      calc_rmse_win(y_test, pred_test, cap_95),
+      calc_mae_win(y_test, pred_test, cap_99),
+      calc_mae_win(y_test, pred_test, cap_95),
+      WeightedGini(y_test, w_test, pred_test),
+      NormalisedWeightedGini(y_test, w_test, pred_test),
+      sum(w_test * Gamma()$dev.resids(y_test, pred_test, 1)),
+      sum(y_test * w_test) / sum(pred_test * w_test))
+  }
+
+  # 1. GLM2 (baseline)
+  t1 <- system.time({ m1 <- glm.fit2(x = X_train, y = y_train, weights = w_train,
+                                     family = family_type, control = control_list) })
+  res1 <- eval_model(m1$coefficients); iter1 <- m1$iter; conv1 <- m1$converged
+  # 2. Ridge
+  t2 <- system.time({ m2 <- cv.glmnet(X_train[, -1], y_train, weights = w_train,
+                                      family = Gamma(link = "log"), alpha = 0,
+                                      nlambda = 50, nfolds = 5) })
+  res2 <- eval_model(as.vector(coef(m2, s = "lambda.min")))
+  iter2 <- if (is.null(m2$glmnet.fit$npasses)) NA else m2$glmnet.fit$npasses[1]
+  conv2 <- NA
+  # 3. Elastic Net
+  t3 <- system.time({ m3 <- cv.glmnet(X_train[, -1], y_train, weights = w_train,
+                                      family = Gamma(link = "log"), alpha = 0.5,
+                                      nlambda = 50, nfolds = 5) })
+  res3 <- eval_model(as.vector(coef(m3, s = "lambda.min")))
+  iter3 <- if (is.null(m3$glmnet.fit$npasses)) NA else m3$glmnet.fit$npasses[1]
+  conv3 <- NA
+  # 4.-9. Shrinkage GLMs (savvyGLM)
+  savvy_classes <- c("St", "DSh", "SR", "GSR", "LW", "QIS")
+  savvy_out <- lapply(savvy_classes, function(cl) {
+    tt <- system.time({ m <- savvy_glm.fit2(x = X_train, y = y_train,
+                                            weights = w_train,
+                                            family = family_type,
+                                            model_class = cl,
+                                            control = control_list) })
+    list(res = eval_model(m$coefficients), t = tt[3], it = m$iter,
+         conv = isTRUE(m$converged))
+  })
+  names(savvy_out) <- savvy_classes
+
+  ord <- c("GLM2", "RR", "EN", "QIS", "LW", "SR", "GSR", "St", "DSh")
+  all_res <- rbind(res1, res2, res3,
+                   savvy_out$QIS$res, savvy_out$LW$res, savvy_out$SR$res,
+                   savvy_out$GSR$res, savvy_out$St$res, savvy_out$DSh$res)
+  times <- c(t1[3], t2[3], t3[3], sapply(ord[4:9], function(cl) savvy_out[[cl]]$t))
+  iters <- c(iter1, iter2, iter3, sapply(ord[4:9], function(cl) savvy_out[[cl]]$it))
+  convs <- c(conv1, conv2, conv3, sapply(ord[4:9], function(cl) savvy_out[[cl]]$conv))
+
+  df_metrics <- data.frame(Iteration = i, Model = ord,
+             RMSE = all_res[, 1], MAE = all_res[, 2],
+             RMSE_Win_99 = all_res[, 3], RMSE_Win_95 = all_res[, 4],
+             MAE_Win_99 = all_res[, 5], MAE_Win_95 = all_res[, 6],
+             Gini_Raw = all_res[, 7], Gini_Norm = all_res[, 8],
+             Dev = all_res[, 9], AE_Ratio = all_res[, 10],
+             CT = as.numeric(times), NoIt = as.numeric(iters),
+             Converged = convs)
+
+  df_metrics
+}
+
+```
+
+```{r b1-loop, eval=FALSE, echo=FALSE}
+# NOTE: the full 100 x 5 = 500-run loop takes ~20 minutes
+# results are pre-computed once and cached to final_results.rds (loaded below)
+n_repeats <- 100
+n_iter <- n_repeats * n_folds
+results_list <- vector("list", n_iter)
+for (i in seq_len(n_iter)) {
+  results_list[[i]] <- run_single_iteration(i)
+  cat(sprintf("Finished iteration %d of %d.\n", i, n_iter))
+}
+final_results <- do.call(rbind, results_list)
+saveRDS(final_results, "data/final_results.rds")
+```
+
+```{r b1-load, eval=TRUE, echo=FALSE}
+# Load cached results & check the cache matches the final configuration
+#   filter ClaimNb == 1
+#   group seed 12
+#   n = 1,000
+#   500 runs
+#   9 models
+final_results <- readRDS("data/final_results.rds")
+n_runs <- length(unique(final_results$Iteration))
+stopifnot(
+  n_pol == 1000,
+  n_runs == 500,
+  setequal(unique(final_results$Model), model_names)
+)
+```
+
+```{r b1-summaries, include=FALSE}
+# Raw and relative performance tables ====
+metric_cols <- c(
+  "RMSE", "MAE", "RMSE_Win_99", "RMSE_Win_95",
+  "MAE_Win_99", "MAE_Win_95", "Dev",
+  "Gini_Raw", "Gini_Norm", "AE_Ratio", "CT", "NoIt"
+)
+
+# Raw table: mean of each metric per model across all 500 runs
+raw_tab <- aggregate(final_results[, metric_cols],
+  by = list(Model = final_results$Model),
+  FUN = mean, na.rm = TRUE
+)
+raw_tab <- raw_tab[match(model_names, raw_tab$Model), ]
+
+# Relative table: mean of PER-RUN ratios vs the GLM2 value in the SAME run
+# (ratio-of-averages would understate run-to-run variation; the brief asks
+# for the average of ratios).
+glm2_rows <- final_results[final_results$Model == "GLM2", ]
+glm2_aligned <- glm2_rows[
+  match(final_results$Iteration, glm2_rows$Iteration),
+  metric_cols
+]
+rel_runs <- final_results
+rel_runs[metric_cols] <- final_results[metric_cols] / glm2_aligned
+rel_tab <- aggregate(rel_runs[, metric_cols],
+  by = list(Model = rel_runs$Model),
+  FUN = mean, na.rm = TRUE
+)
+rel_tab <- rel_tab[match(model_names, rel_tab$Model), ]
+
+# Display copy for the kable. The per-run GLM2 Gini is small and frequently
+# negative, so Gini ratios flip sign and explode
+# Both Gini columns (and AE, a ratio of ratios) are judged from the raw table
+# rel_tab itself is kept numeric for inline references
+ratio_excluded <- c("Gini_Raw", "Gini_Norm", "AE_Ratio")
+rel_tab_disp <- rel_tab
+rel_tab_disp[ratio_excluded] <- NA_real_
+
+# Direction of "better", per the brief, used for highlighting
+metric_dir <- c(
+  RMSE = "min", MAE = "min", RMSE_Win_99 = "min",
+  RMSE_Win_95 = "min", MAE_Win_99 = "min", MAE_Win_95 = "min",
+  Dev = "min", Gini_Raw = "max", Gini_Norm = "max",
+  AE_Ratio = "one", CT = "min", NoIt = "min"
+)
+best_flag <- function(v, dir) {
+  switch(dir,
+    min = v == min(v, na.rm = TRUE),
+    max = v == max(v, na.rm = TRUE),
+    one = abs(v - 1) == min(abs(v - 1), na.rm = TRUE)
+  )
+}
+
+# Convergence summary for the appendix (NA for glmnet, which does not expose
+# a comparable flag; its warnings are discussed in §\@ref(apx-b-convergence))
+conv_tab <- aggregate(Converged ~ Model,
+  data = final_results,
+  FUN = function(x) 100 * mean(x, na.rm = TRUE)
+)
+```
+
+```{r b2-best, include=FALSE}
+# Model selection for B2. The choice weighs several criteria (see prose), so
+# it is made explicitly rather than by argmin
+# the stopifnot below verifies that the stated basis for the choice 
+# (best winsorised RMSE at both caps and best deviance in the relative table)
+# holds in the data, so a stale cache or changed configuration fails the knit
+# rather than silently contradicting B2.
+best_model <- "RR"
+stopifnot(
+  rel_tab$Model[which.min(rel_tab$RMSE_Win_95)] == best_model,
+  rel_tab$Model[which.min(rel_tab$RMSE_Win_99)] == best_model,
+  rel_tab$Model[which.min(rel_tab$Dev)] == best_model
+)
+
+# Headline numbers for the chosen model for inline reference
+bm_rel <- rel_tab[rel_tab$Model == best_model, ]
+bm_raw <- raw_tab[raw_tab$Model == best_model, ]
+g2_raw <- raw_tab[raw_tab$Model == "GLM2", ]
+bm_rmse95_gain <- 100 * (1 - bm_rel$RMSE_Win_95) # % improvement vs GLM2
+bm_mae95_gain <- 100 * (1 - bm_rel$MAE_Win_95)
+
+# Per-run win rate vs GLM2 on winsorised RMSE (95% cap)
+bm_w95_winrate <- 100 * mean(
+  rel_runs$RMSE_Win_95[rel_runs$Model == best_model] < 1,
+  na.rm = TRUE
+)
+
+# Comparison values for the B2 prose
+en_rel <- rel_tab[rel_tab$Model == "EN", ]
+en_gap_w95 <- 100 * (en_rel$RMSE_Win_95 - bm_rel$RMSE_Win_95) # EN vs RR, pp
+dsh_ae <- raw_tab$AE_Ratio[raw_tab$Model == "DSh"]
+bm_ae_shortfall <- 100 * abs(bm_raw$AE_Ratio - 1) # % miscalibration
+```
+
+```{r b3-insample, include=FALSE}
+# B3: in-sample analysis of the chosen model on all 1,000 observations ====
+# The full dataset plays the role of the training set: splines, leave-one-out
+# target encoding and standardisation are all built on the same 1,000 rows.
+fe_full <- build_features(data_sev, test = NULL)
+full_data <- fe_full$train
+X_full <- model.matrix(glm_formula, full_data)
+y_full <- full_data$Severity
+w_full <- full_data$ClaimNb
+
+# BE note: cv.glmnet randomises its internal folds so setting internal seed
+# again here 
+set.seed(group_num)
+coefs_full <- fit_model_coefs(best_model, X_full, y_full, w_full)
+coefs_full[is.na(coefs_full)] <- 0
+mu_full <- exp(as.numeric(X_full %*% coefs_full))
+
+# In-sample summary metrics
+is_rmse <- sqrt(mean((y_full - mu_full)^2))
+is_mae <- mean(abs(y_full - mu_full))
+is_gini <- NormalisedWeightedGini(y_full, w_full, mu_full)
+is_ae <- sum(y_full * w_full) / sum(mu_full * w_full)
+is_dev <- sum(w_full * Gamma()$dev.resids(y_full, mu_full, 1))
+null_mu <- weighted.mean(y_full, w_full)
+is_dev_null <- sum(w_full * Gamma()$dev.resids(y_full, rep(null_mu, n_pol), 1))
+is_pseudoR2 <- 1 - is_dev / is_dev_null
+
+# Deviance residuals and calibration by predicted-severity decile
+dev_res <- sign(y_full - mu_full) *
+  sqrt(w_full * Gamma()$dev.resids(y_full, mu_full, 1))
+decile_tab <- data.frame(y = y_full, mu = mu_full) |>
+  dplyr::mutate(Decile = dplyr::ntile(mu, 10)) |>
+  dplyr::group_by(Decile) |>
+  dplyr::summarise(
+    N = dplyr::n(),
+    `Mean predicted` = mean(mu),
+    `Mean actual` = mean(y),
+    `AE ratio` = sum(y) / sum(mu),
+    .groups = "drop"
+  )
+
+# Values for the B3 prose
+pred_lo <- min(mu_full)
+pred_hi <- max(mu_full)
+pred_span <- pred_hi - pred_lo
+act_lo <- min(y_full)
+act_hi <- max(y_full)
+dec_pred_first <- decile_tab$`Mean predicted`[1]
+dec_pred_last  <- decile_tab$`Mean predicted`[nrow(decile_tab)]
+dec_act_min <- min(decile_tab$`Mean actual`)
+dec_act_max <- max(decile_tab$`Mean actual`)
+dec_ae_lo9  <- min(decile_tab$`AE ratio`[-nrow(decile_tab)])
+dec_ae_hi9  <- max(decile_tab$`AE ratio`[-nrow(decile_tab)])
+dec_ae_top  <- decile_tab$`AE ratio`[nrow(decile_tab)]
+
+# GLM2 comparison fit for the figure (deterministic, no internal randomness)
+mu_glm2 <- exp(as.numeric(
+  X_full %*% fit_model_coefs("GLM2", X_full, y_full, w_full)
+))
+```
+
+---
+
+<!-- ## Executive summary {-} -->
+
+<!-- TBI (going to do last) if required.  Thinking of this as being 1-2 paragraphs max. A bit like a scientific abstract to set the stage. -->
+
+## Out-of-sample performance evaluation {#b-i}
+
+### Data and preprocessing {#b-prep}
+
+The French Motor Third-Party Liability (freMTPL2) frequency and severity
+datasets were merged on policy ID after aggregating claim amounts per policy.
+Policies with exactly one claim and a positive claim amount were retained, and a
+random sample of `r fmt(n_pol, 0)` policies was drawn under our Group 
+`r group_num` seed. This sample was fixed for all subsequent analysis, with the
+cross-validation seeds inside the evaluation loop reshuffling only the fold
+labels.
+
+Three groups of features were then constructed. Continuous rating factors were
+capped and log-transformed, with `VehPower` capped at 9, `BonusMalus` at 150
+and `Density` floored at 1, to bound implausible values and squash the heavy
+right tails typical of insurance covariates. Driver and vehicle age entered
+through natural cubic splines with three degrees of freedom, allowing the
+non-monotone age effects familiar from motor pricing. The high-cardinality
+factors `Region`, `Area` and `VehBrand` were target-encoded with a
+credibility-style smoother,
+$$
+\text{TE} = \lambda\,\bar y_{\text{group}} + (1-\lambda)\,\bar y_{\text{global}}
+$$
+with $\lambda = n/(n + \kappa)$ and $\kappa = 20$, computed leave-one-out on
+training rows so that a policy never contributes to its own encoding. Target encoding also keeps
+the design matrix compact. One-hot encoding these three factors would add
+roughly thirty sparse columns to an 800-row training fold, worsening the
+conditioning of the weighted information matrix that must be inverted at
+every step of the iteratively reweighted least squares (IRLS) algorithm.
+
+All continuous features were standardised using training-fold means and
+standard deviations. Standardisation is not strictly required for any of the
+fitted models, since fitted values depend on the data only through the linear
+predictor, but it is retained for comparability with the released practice
+code. Every preprocessing step was learned on training folds and frozen
+before application to test folds, so no information leaks from test to train.
+The robustness of these choices, covering the two variable caps, the spline
+flexibility, the target-encoding smoother $\kappa$ and the standardisation
+step, is examined in Appendix \@ref(apx-b-robustness). In **R** this was
+implemented as follows:
+
+```{r b-data-prep-show, ref.label="b-data-prep", echo=TRUE, eval=FALSE}
+```
+
+### Models and out-of-sample evaluation design {#b-design}
+
+Nine models were fitted with a Gamma response and log link such that
+$$
+\hat y_i = \hat\mu_i = \exp(x_i^\top\hat\beta)
+$$
+The IRLS fit `GLM2` serves as the baseline. Ridge regression (RR) and elastic net (EN)
+were fitted via `cv.glmnet`, with the penalty chosen by internal
+cross-validation (`lambda.min`). The remaining six models are the shrinkage
+GLMs of @Asimit2025GLMsolsviaShrinkage implemented in the `savvyGLM` package
+(`St`, `DSh`, `SR`, `GSR`, `LW` and `QIS`). These estimators shrink the maximum-likelihood estimates towards structured targets in the spirit of the
+mean and covariance shrinkage used in Coursework 1. Mechanically, these
+estimators retain the IRLS structure of `glm.fit2` but replace the weighted
+least squares (WLS) step at each iteration with a shrunk solution. `St` and
+`DSh` rescale the WLS coefficients by scalars chosen to minimise mean squared
+error, `SR` and `GSR` impose slab penalties along eigenvector directions, and
+`LW` and `QIS` shrink the weighted information matrix before inversion. All
+shrinkage intensities are available in closed form, so unlike RR and EN
+no cross-validation is required. RR and EN are fitted by
+coordinate descent, which is why their computation time (CT) and iteration
+count (NoIt) are not directly comparable with those of the IRLS family.
+
+Performance in each run is scored by the metrics specified in the brief. The
+root mean squared error (RMSE) and mean absolute error (MAE) measure raw
+prediction error, with winsorised variants capping actual and predicted
+values at the 99th and 95th training-response percentiles (W99, W95) to limit
+distortion from extreme claims. The Gamma deviance (Dev) measures
+goodness-of-fit under the assumed distribution, the raw and normalised Gini
+indices measure risk-ranking ability, and the actual-to-expected (AE) ratio
+measures aggregate calibration, with a value of one indicating that total
+predicted severity matches total observed severity.
+
+Out-of-sample performance is estimated by 5-fold cross-validation replicated
+100 times, giving `r fmt(n_runs, 0)` evaluation runs. In each replication the
+`r fmt(n_pol, 0)` policies are partitioned into five folds, with 80% of
+observations training the models and 20% testing them, and each fold serves
+as the test set exactly once. Winsorisation caps for the robust error metrics are computed from the training response in each run. The evaluation loop is reproduced below, with results cached to an rds file and reloaded at knit time
+under the final configuration (one-claim filter, group seed 
+`r group_num`, $n = `r fmt(n_pol, 0)`$).
+
+```{r b1-loop-show, ref.label="b1-loop", echo=TRUE, eval=FALSE}
+```
+
+Convergence warnings emitted by `glmnet` and by the `savvyGLM` step-halving
+safeguard during the loop are expected behaviour of those fitters rather than
+evidence of failure, and are discussed further in Appendix
+\@ref(apx-b-convergence).
+
+### Raw performance {#b1-raw}
+
+Table \@ref(tab:b1-raw-table) reports each metric averaged over all
+`r fmt(n_runs, 0)` runs. Because severity is heavy-tailed, the unwinsorised
+RMSE is dominated by a handful of very large claims and separates the models
+poorly, so the winsorised variants are the more informative measures of
+accuracy. A second feature of the table shapes the whole comparison. Every
+normalised Gini is negative, baseline included (the least negative is EN at
+`r fmt(raw_tab$Gini_Norm[raw_tab$Model == "EN"], 3)`), whereas a model with
+genuine ranking power has a normalised Gini in $(0, 1]$. At
+$n = `r fmt(n_pol, 0)`$, policy-level claim severity therefore carries
+essentially no rankable out-of-sample signal. This is an expected property of
+individual severity, where most variation is claim-level randomness, rather
+than a defect of any particular estimator. The Gini columns are retained for
+completeness, and the comparison between models rests on the winsorised
+errors, the Gamma deviance and the AE calibration ratio.
+
+```{r b1-raw-table}
+kb <- kable(raw_tab,
+  row.names = FALSE, booktabs = TRUE,
+  digits = c(NA, 0, 0, 0, 0, 0, 0, 1, 4, 4, 3, 3, 1),
+  caption = paste0("Raw out-of-sample performance: mean of each metric over all ", fmt(n_runs, 0), " evaluation runs. The best value per column is shown in green (lower is better for the error, deviance, time and iteration metrics, higher for the Gini indices, and closest to one for the AE ratio). NoIt counts IRLS iterations for GLM2 and savvyGLM but coordinate-descent passes for glmnet, so it is not comparable across those two families."),
+  col.names = c(
+    "Model", "RMSE", "MAE", "RMSE W99", "RMSE W95", "MAE W99",
+    "MAE W95", "Dev.", "Gini raw", "Gini norm", "AE", "CT (s)",
+    "NoIt"
+  )
+) |>
+  kable_styling(
+    full_width = FALSE, position = "center", font_size = 8,
+    latex_options = c("scale_down", "hold_position")
+  ) |>
+  pack_rows("Baseline", 1, 1) |>
+  pack_rows("Penalised (glmnet)", 2, 3) |>
+  pack_rows("Shrinkage GLMs (savvyGLM)", 4, 9)
+for (j in seq_along(metric_cols)) {
+  b <- best_flag(raw_tab[[metric_cols[j]]], metric_dir[metric_cols[j]])
+  kb <- column_spec(kb, j + 1, bold = b, color = ifelse(b, "#1b9e77", "black"))
+}
+kb
+```
+
+```{r b1-rel-table}
+kb <- kable(rel_tab_disp,
+  row.names = FALSE, booktabs = TRUE, digits = 3,
+  caption = "Relative out-of-sample performance: mean of per-run ratios versus GLM2 (GLM2 = 1 by construction). Values below one are better for the error, deviance, time and iteration metrics. The AE ratio is itself a ratio and the per-run GLM2 Gini is near zero and sign-varying, so ratios of these three columns are not meaningful. As they are judged from the raw table their cells are omitted here.",
+  col.names = c(
+    "Model", "RMSE", "MAE", "RMSE W99", "RMSE W95", "MAE W99",
+    "MAE W95", "Dev.", "Gini raw", "Gini norm", "AE", "CT (s)", "NoIt"
+  )
+) |>
+  kable_styling(
+    full_width = FALSE, position = "center", font_size = 8,
+    latex_options = c("scale_down", "hold_position")
+  ) |>
+  pack_rows("Baseline", 1, 1) |>
+  pack_rows("Penalised (glmnet)", 2, 3) |>
+  pack_rows("Shrinkage GLMs (savvyGLM)", 4, 9)
+for (j in seq_along(metric_cols)) {
+  if (metric_cols[j] %in% ratio_excluded) next
+  b <- best_flag(rel_tab_disp[[metric_cols[j]]], metric_dir[metric_cols[j]])
+  b[rel_tab_disp$Model == "GLM2"] <- FALSE
+  kb <- column_spec(kb, j + 1, bold = b, color = ifelse(b, "#1b9e77", "black"))
+}
+kb
+```
+
+
+### Relative performance {#b1-rel}
+
+Table \@ref(tab:b1-rel-table) shows the average of the
+per-run ratios against the `GLM2` value in the same run for each metric, given by Eq. \@ref(eq:relative-performance).
+\begin{equation}
+\frac{1}{500}\sum_{j=1}^{500}
+\frac{\text{Metric for Model}^{(j)}}{\text{Metric for GLM2}^{(j)}}
+(\#eq:relative-performance)
+\end{equation}
+Because each ratio conditions on the same train/test split, fold-to-fold
+noise cancels and the table isolates the systematic effect of the estimator.
+Three columns are excluded from ratio form. The AE ratio is already a ratio,
+so a further ratio has no calibration interpretation. The same exclusion
+applies with greater force to the two Gini indices, whose per-run `GLM2`
+denominator is small and frequently negative, so the resulting ratios flip
+sign and explode. The mechanism is the same division by a near-zero quantity
+that inflated the tangency leverage in Coursework 1 (Appendix
+\@ref(apx-pathology)), with one important difference. In Coursework 1 the denominator was part of the portfolio construction, so the explosion was a genuine economic property of the strategy. Here it is an artefact of the
+reporting convention and carries no information about the models. All three
+metrics are therefore judged from the raw table (Table
+\@ref(tab:b1-raw-table)) and their ratio cells are omitted.
+
+Where the ratios are interpretable, a consistent ordering emerges. RR
+delivers the largest systematic reductions in the winsorised RMSEs
+(`r fmt(100 * (1 - rel_tab$RMSE_Win_95[rel_tab$Model == "RR"]), 1)`%
+at the 95% cap) and in deviance, with EN a near-tie, while the `savvyGLM`
+estimators cluster around parity with `GLM2` at a fraction of `glmnet`'s
+computation time. This ordering is consistent with the evidence in
+@Asimit2025GLMsolsviaShrinkage, which finds ridge regression dominant under
+the log link used here in both simulation and the freMTPL2 application.
+
+## Model comparison and selection {#b-b2}
+
+With no model showing out-of-sample ranking power (Section \@ref(b1-raw)),
+selection rests on tail-robust accuracy, deviance and calibration. On that basis
+we select Ridge Regression (RR) as the "best" overall performer. RR posts the
+best winsorised RMSE at both caps and the lowest deviance, beating `GLM2` on the
+95%-capped RMSE in
+`r fmt(bm_w95_winrate, 1)`% of the `r fmt(n_runs, 0)` runs with a
+`r fmt(bm_rmse95_gain, 1)`% average reduction. Elastic net is practically
+indistinguishable, within
+`r fmt(en_gap_w95, 1)` percentage points on the 95%-capped RMSE with marginally
+better calibration, and would be an equally defensible choice. RR's aggregate
+calibration (AE `r fmt(bm_raw$AE_Ratio, 3)`) trails DSh
+(`r fmt(dsh_ae, 3)`), but a uniform `r fmt(bm_ae_shortfall, 0)`% shortfall is
+corrected by rebasing the premium level, whereas DSh cannot recover RR's
+accuracy. That penalised L2 beats the bespoke shrinkage GLMs is itself
+informative. At n = `r fmt(n_pol, 0)`, with a correlated spline and
+target-encoded design and almost no severity signal, the optimal shrinkage is
+heavy. Ridge tunes its intensity directly against predictive loss by
+cross-validation, while the `savvyGLM` plug-in intensities shrink towards
+maximum-likelihood targets that inherit the noise, the regime in which
+@Asimit2025GLMsolsviaShrinkage likewise find ridge dominant under the log
+link. RR's computation time, under a second per fit, is immaterial.
+
+## In-sample performance analysis {#b-b3}
+
+The chosen model, `r best_model`, was refitted to the full sample of
+`r fmt(n_pol, 0)` policies. The preprocessing described in Section
+\@ref(b-prep) was applied unchanged, with the splines, leave-one-out target
+encoding and standardisation now learned from all `r fmt(n_pol, 0)` rows and
+the penalty re-selected by `cv.glmnet` under our group seed (`r group_num`) so
+that the fit was stable between knits. Its fitted severities $\hat y_i$ are
+compared with the observed claims $y_i$ below.
+
+```{r b3-insample-summary, include=FALSE}
+# BE note: note that this is dependent upon is_dev_null
+# It's also a duplication or b3-insample.  
+# Need to update in two places currently - look to fix in future
+# 
+# In-sample metrics for the selected model and the unpenalised baseline,
+# computed on the same full-sample fit used in the figure below.
+is_metrics <- function(mu) {
+  dev <- sum(w_full * Gamma()$dev.resids(y_full, mu, 1))
+  c(
+    RMSE = sqrt(mean((y_full - mu)^2)),
+    MAE = mean(abs(y_full - mu)),
+    AE = sum(y_full * w_full) / sum(mu * w_full),
+    Gini = NormalisedWeightedGini(y_full, w_full, mu),
+    PseudoR2 = 1 - dev / is_dev_null
+  )
+}
+m_rr <- is_metrics(mu_full)
+m_g2 <- is_metrics(mu_glm2)
+
+is_summary <- data.frame(
+  Metric = c(
+    "RMSE (EUR)", "MAE (EUR)", "AE ratio", "Normalised Gini",
+    "Deviance reduction vs intercept-only"
+  ),
+  RR = c(
+    fmt(m_rr["RMSE"], 0), fmt(m_rr["MAE"], 0), fmt(m_rr["AE"], 3),
+    fmt(m_rr["Gini"], 3), paste0(fmt(100 * m_rr["PseudoR2"], 1), "%")
+  ),
+  GLM2 = c(
+    fmt(m_g2["RMSE"], 0), fmt(m_g2["MAE"], 0), fmt(m_g2["AE"], 3),
+    fmt(m_g2["Gini"], 3), paste0(fmt(100 * m_g2["PseudoR2"], 1), "%")
+  ),
+  check.names = FALSE
+)
+```
+
+At the portfolio level the model is almost perfectly calibrated. The
+actual-to-expected ratio is `r fmt(is_ae, 3)`, so total predicted severity
+matches total observed severity to within `r fmt(100 * abs(is_ae - 1), 1)`%.
+Beneath that aggregate, however, the model differentiates very little. The
+Gamma deviance falls only `r fmt(100 * is_pseudoR2, 1)`% below the
+intercept-only model, and the `r fmt(n_pol, 0)` fitted severities span a band
+of roughly `r fmt(pred_span, 0)` euros (€`r fmt(pred_lo, 0)` to
+€`r fmt(pred_hi, 0)`) around the portfolio mean, against actual claims ranging
+from €`r fmt(act_lo, 0)` to €`r fmt(act_hi, 0)`. Fitted to all
+`r fmt(n_pol, 0)` rows, `cv.glmnet` selects a heavy penalty and shrinks the
+model nearly to the intercept. This is the in-sample face of the selection
+argument in \@ref(b-b2). With almost no rankable severity signal, the
+loss-minimising fit sits close to a constant. `r best_model` won the
+out-of-sample comparison precisely because it declines to fit noise. Absolute
+errors remain large (RMSE `r fmt(is_rmse, 0)`, MAE `r fmt(is_mae, 0)`), an
+unavoidable feature of individual-level severity, where most of the variance is
+claim-level randomness that is not predictable from any policyholder
+characteristic present in the data.
+
+Table \@ref(tab:b3-summary-table) places the in-sample metrics beside the
+unpenalised `GLM2` baseline fitted to the same rows. `GLM2` posts the lower
+in-sample RMSE, the larger deviance reduction and the higher normalised Gini,
+yet Table \@ref(tab:b1-raw-table) showed it losing to `r best_model` on all the
+error metrics. The additional in-sample fit that `GLM2` achieves does not
+generalise, which is the clearest demonstration of what the ridge penalty
+removes. `GLM2` also miscalibrates in aggregate (AE
+`r fmt(m_g2["AE"], 3)`), over-predicting total severity by 
+`r fmt(100 * abs(m_g2["AE"] - 1), 1)`%, so the penalty improves the portfolio 
+level as well as the policy level.
+
+```{r b3-summary-table}
+kable(is_summary,
+  booktabs = TRUE, 
+  row.names = FALSE, 
+  align = c("l", "r", "r"),
+  col.names = c("Metric", best_model, "GLM2"),
+  caption = paste0(
+    "In-sample performance of the selected ", best_model,
+    " model and the unpenalised GLM2 baseline, both fitted to all ",
+    fmt(n_pol, 0), " policies. GLM2 fits the sample more closely on every ",
+    "measure, but that additional fit does not survive out of sample."
+  )
+) |>
+  kable_styling(
+    full_width = FALSE, position = "center",
+    latex_options = "hold_position"
+  )
+```
+
+```{r b3-fig-panels, fig.cap = paste0("In-sample diagnostics for ", best_model, " on the full sample. Panel A: fitted against actual severity (log scales) for the unpenalised GLM2 baseline and the selected ", best_model, " model, with the dashed line marking perfect prediction. Panel B: ", best_model," deviance residuals against predicted severity."), fig.width=6, fig.height=5.5}
+pa_df <- rbind(
+  data.frame(Model = "GLM2 (baseline)", mu = mu_glm2, y = y_full),
+  data.frame(Model = "RR (selected)", mu = mu_full, y = y_full)
+)
+p_pa <- ggplot(pa_df, aes(mu, y)) +
+  geom_point(alpha = .3, size = .8, colour = "#0072B2") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  scale_x_log10(labels = scales::comma) +
+  scale_y_log10(labels = scales::comma) +
+  facet_wrap(~Model) +
+  labs(x = "Predicted severity (EUR, log scale)", y = "Actual severity (EUR, log scale)") +
+  theme_minimal()
+p_res <- ggplot(data.frame(mu = mu_full, r = dev_res), aes(mu, r)) +
+  geom_hline(yintercept = 0, linewidth = .3) +
+  geom_point(alpha = .3, size = .8, colour = "#0072B2") +
+  scale_x_continuous(labels = scales::comma) +
+  labs(x = "Predicted severity, RR (EUR)", y = "Deviance residual") +
+  theme_minimal()
+p_pa / p_res + plot_layout(heights = c(1.2, 1)) + plot_annotation(tag_levels = "A")
+```
+
+Figure \@ref(fig:b3-fig-panels) illustrates these points visually by placing
+`r best_model` beside the unpenalised `GLM2` fitted to the same data. `GLM2`
+spreads its predictions across an order of magnitude while `r best_model`
+compresses them to a narrow vertical band. However, Table
+\@ref(tab:b1-raw-table) shows that the wider spread carries no out-of-sample
+ranking power. It is fitted noise, and removing it is exactly what the penalty
+is for. Panel B plots the deviance residuals. With near-constant predictions
+these display the dispersion of individual claims around a single level, rather
+than acting as a diagnostic of the link specification. The cloud is centred on
+zero with the positive skew of the severity tail.
+
+```{r b3-decile-table}
+kable(decile_tab,
+  booktabs = TRUE, digits = c(0, 0, 0, 0, 3),
+  align = c("c", "c", "c", "c", "c"),
+  col.names = c(
+    "Decile", "N", "Mean predicted (EUR)",
+    "Mean actual (EUR)", "AE ratio"
+  ),
+  caption = paste0(
+    "In-sample calibration of ", best_model,
+    " by decile of predicted severity, with the decile actual-to-expected ratio."
+  )
+) |>
+  kable_styling(
+    full_width = FALSE, position = "center",
+    latex_options = "hold_position"
+  )
+```
+
+Table \@ref(tab:b3-decile-table) sorts policies into deciles of predicted
+severity. Mean predicted severity is essentially flat, rising from
+€`r fmt(dec_pred_first, 0)` in the bottom decile to €`r fmt(dec_pred_last, 0)` 
+in the top, while mean actual severity swings from €`r fmt(dec_act_min, 0)` to
+€`r fmt(dec_act_max, 0)`. The decile AE ratios are patternless across the lower
+nine deciles (`r fmt(dec_ae_lo9, 2)` to `r fmt(dec_ae_hi9, 2)`) before jumping
+to `r fmt(dec_ae_top, 2)` in the top decile. With a near-constant predictor,
+decile membership mostly slices noise, and the top decile happens to capture a
+cluster of large claims. That cluster is the sole source of the modest
+in-sample normalised Gini of `r fmt(is_gini, 3)`, a figure that fails to
+survive out of sample, where every model's Gini is negative.
+
+At this volume, average claim severity is best rated near-flat. In the standard
+frequency-severity decomposition, risk differentiation is carried by the
+frequency model, and exposure to the largest claims is managed through
+large-claim loadings or layered reinsurance rather than the policy-level
+severity model. As such, `r best_model`'s behaviour is not a defect but the
+coherent endpoint of the analysis. It is an almost perfectly calibrated
+aggregate level, and an honest refusal to manufacture differentiation the data
+cannot support.
+
+
+<!-- ```{=html} -->
+<!-- # References -->
+<!-- <div id="refs"></div> -->
+<!-- ``` -->
+
+<!-- ```{=latex} -->
+<!-- \bibliography{references.bib} -->
+<!-- ``` -->
+
+```{=latex}
+\clearpage
+\newpage
+\section*{Appendices}
+\addcontentsline{toc}{section}{Appendices}
+```
+
+# (APPENDIX) Appendices {-}
+
+```{=latex}
+\titleformat{\section}[block]{\LARGE\bfseries}{\thesection}{1em}{}
+\renewcommand{\thesection}{\arabic{section}}
+\renewcommand{\thesubsection}{\thesection.\arabic{subsection}}
+\renewcommand{\thesubsubsection}{\thesubsection.\arabic{subsubsection}}
+\setcounter{section}{0}
+```
+
+# Coursework 1: Supplemental methodology {#apd-supplementary-methods}
+
+## Mean-vector estimators {#apx-method-mean-vec-estimators}
+
+Every estimator starts from the sample mean vector, $\bar X$. The shrinkage
+estimators adjust $\bar X$ using the unbiased sample covariance of the returns,
+$S$, and the grand mean $\bar X_g = \tfrac{1}{p}\mathbf 1^\top \bar X$, the
+average of $\bar X$ across the $p$ assets. Each estimator maps the $n \times p$
+matrix of training returns to its own length-$p$ estimate, and the estimators
+are compared by mean squared error (MSE).
+
+```{asis, echo=knitr::is_html_output()}
+| Estimator                                                   | Shrinks toward                | How it shrinks                                             | Loss      | Source          |
+| ----------------------------------------------------------- | ----------------------------- | ---------------------------------------------------------- | --------- | --------------- |
+| Sample mean                                                 | no shrinkage                  | Unbiased. High variance when $p \approx n$                 | -         | -               |
+| Stein Multiplicative Shrinkage `St-MSh`                     | zero                          | One scalar $\hat c \in [0,1)$ applied to every asset       | MSE       | @Asimit15062026 |
+| Diagonal Multiplicative Shrinkage `D-MSh`                   | zero                          | Asset-specific scalars $\hat c_k$ (suits differing scales) | MSE       | @Asimit15062026 |
+| One-Parameter Linear Shrinkage `O-LSh`                      | grand mean                    | One intensity $\hat\delta$                                 | MSE       | @Asimit15062026 |
+| Two-Parameter Linear Shrinkage `T-LSh`                      | grand mean, rescaled          | Intensity $\hat\delta$ plus target scaling $\hat\xi$       | MSE       | @Asimit15062026 |
+| The shrinkage estimator in @Wang2014 `Wang`                 | grand mean                    | One intensity, estimated by U-statistics                   | MSE       | @Wang2014       |
+| The shrinkage estimator in @Bodnar2019 `BOP`                | precision-weighted grand mean | One intensity, built from $S^{+}$                          | invariant | @Bodnar2019     |
+| The Bayes-Stein shrinkage estimator in @Jorion1986 `Jorion` | precision-weighted grand mean | Bayes-Stein intensity                                      | invariant | @Jorion1986     |
+```
+
+```{r apx-mean-estimator-table, eval=knitr::is_latex_output()}
+est_tab <- data.frame(
+  Estimator = c(
+    "Sample mean",
+    "Stein Multiplicative Shrinkage (\\greentt{St-MSh})",
+    "Diagonal Multiplicative Shrinkage (\\greentt{D-MSh})",
+    "One-Parameter Linear Shrinkage (\\greentt{O-LSh})",
+    "Two-Parameter Linear Shrinkage (\\greentt{T-LSh})",
+    "Shrinkage estimator of Wang et al. (\\greentt{Wang})",
+    "Shrinkage estimator of Bodnar et al. (\\greentt{BOP})",
+    "Bayes--Stein estimator (\\greentt{Jorion})"
+  ),
+  Target = c(
+    "no shrinkage",
+    "zero",
+    "zero",
+    "grand mean",
+    "grand mean, rescaled",
+    "grand mean",
+    "precision-weighted grand mean",
+    "precision-weighted grand mean"
+  ),
+  How = c(
+    "Unbiased; high variance when $p \\approx n$",
+    "One scalar $\\hat c \\in [0,1)$ applied to every asset",
+    "Asset-specific scalars $\\hat c_k$ (suits differing scales)",
+    "One intensity $\\hat\\delta$",
+    "Intensity $\\hat\\delta$ plus target scaling $\\hat\\xi$",
+    "One intensity, estimated by U-statistics",
+    "One intensity, built from $S^{+}$",
+    "Bayes--Stein intensity"
+  ),
+  Loss = c(
+    "---", "MSE", "MSE", "MSE", "MSE", "MSE",
+    "invariant", "invariant"
+  ),
+  # manually coded
+  Source = c( 
+    "---",
+    "\\citet{Asimit15062026}", "\\citet{Asimit15062026}",
+    "\\citet{Asimit15062026}", "\\citet{Asimit15062026}",
+    "\\citet{Wang2014}", "\\citet{Bodnar2019}", "\\citet{Jorion1986}"
+  )
+)
+kable(est_tab,
+  booktabs = TRUE, escape = FALSE, row.names = FALSE,
+  caption = "Mean-vector estimators: shrinkage target, mechanism, and the loss each is designed to minimise.",
+  col.names = c("Estimator", "Shrinks toward", "How it shrinks", "Loss", "Source"),
+  linesep = ""
+) |>
+  kable_styling(
+    full_width = FALSE, position = "center",
+    font_size = 9, latex_options = "hold_position"
+  ) |>
+  column_spec(1, width = "13em") |>
+  column_spec(2, width = "8em") |>
+  column_spec(3, width = "13em")
+```
+
+
+The four estimators of @Asimit15062026 take the following explicit forms:
+
+$$
+\hat\mu^{\text{St-MSh}} = \hat c\,\bar X,\qquad
+\hat c = \frac{\|\bar X\|_p^2}{\|\bar X\|_p^2 + \tfrac{1}{np}\operatorname{tr}(S)},
+\qquad \|\bar X\|_p^2 = \tfrac{1}{p}\bar X^\top \bar X,
+$$
+$$
+\hat\mu^{\text{D-MSh}}_k = \hat c_k\,\bar X_k,\qquad
+\hat c_k = \frac{\bar X_k^2}{\bar X_k^2 + \tfrac{1}{n}S_{kk}},
+$$
+$$
+\hat\mu^{\text{O-LSh}} = (1-\hat\delta)\bar X + \hat\delta\,\bar X_g\mathbf 1,
+\qquad
+\hat\mu^{\text{T-LSh}} = (1-\hat\delta)\bar X + \hat\delta\hat\xi\,\bar X_g\mathbf 1.
+$$
+
+The amount of shrinkage in each estimator is set by a shrinkage intensity, 
+$\hat c$ or $\hat c_k$. This scalar multiplies the sample mean in `St-MSh` and
+`D-MSh`, or the weight $\hat\delta$ that mixes the sample mean with the target
+in `O-LSh` and `T-LSh`. All four intensities follow the same signal-to-noise
+trade-off. They shrink harder when the sample mean is noisier and less when the
+signal is stronger. `T-LSh` extends `O-LSh` by also scaling the target, and its
+oracle MSE (the MSE it would attain if the true mean and covariance were known)
+is strictly lower than that of `O-LSh`.
+
+The other three estimators, `Wang`, `BOP` and `Jorion`, are established
+benchmarks. `Wang` shares the target of `O-LSh`, the grand mean, but estimates
+its intensity with U-statistics rather than the sample plug-in estimates used
+above [@Wang2014]. `BOP` and `Jorion` instead shrink toward a precision-weighted
+grand mean, a minimum-variance combination formed with $S^{+}$ for `BOP` and
+$\tilde S^{-1}$ for `Jorion` [@Bodnar2019; @Jorion1986]. Both optimise the
+invariant loss rather than the MSE, weighting estimation errors by the precision
+matrix, the inverse covariance.
+
+## Why `St-MSh` reproduces the sample-mean Sharpe ratios exactly {#apx-stmsh-vs-sample}
+
+The identical Sample and `St-MSh` rows in Table \@ref(tab:a-headline-sharpe) are
+not a coincidence, nor a bug. The same identity appears in Table 3 of
+@Asimit15062026 where the `St-MSh` and Sample rows are identical in both the
+mean-variance and tangency panels (e.g. 0.274/1.352 in Panel A and 0.385/1.325
+in Panel B), despite their different universe (441 stocks), frequency (daily)
+and window scheme.
+
+This occurs because `St-MSh` multiplies the sample mean by a single scalar, 
+$\hat\mu^{\text{St-MSh}} = \hat c\,\bar X$, and this scalar is strictly
+positive, since the numerator of $\hat c$ is a squared norm and the denominator
+adds a sum of sample variances. Because the portfolio map is linear in
+$\hat\mu$, the scalar passes straight through to the weights,
+$$
+w_{MV}^{\text{St-MSh}}
+  = \Sigma^{-1}(\hat c\,\bar X)
+  = \hat c\, w_{MV}^{\text{Sample}}
+$$
+and a portfolio's weekly returns scale with its weights,
+$r_t(\hat c\,w) = \hat c\, r_t(w)$. The Sharpe ratio is a ratio of a mean to a
+standard deviation, so any positive constant cancels:
+$$
+\mathrm{SR}(\hat c\,w)
+  = \frac{\hat c\,\bar r}{\hat c\, s_r}\sqrt{52}
+  = \mathrm{SR}(w)
+$$
+The two strategies therefore have the same Sharpe ratio in every window, hence
+the same mean and the same standard deviation across windows. 
+<!-- Note to Vali: this is verified numerically: `r stm_check` -->
+For the tangency portfolio the cancellation happens one step earlier, in the
+weights themselves,
+$$
+w_{TP}^{\text{St-MSh}}
+  = \frac{\hat c\,\Sigma^{-1}\bar X}{\hat c\,\mathbf 1^\top\Sigma^{-1}\bar X}
+  = w_{TP}^{\text{Sample}}
+$$
+As a result `TP_StMSh` and `TP_Sample` are the same portfolio with identical leverage, turnover and net-short windows, as seen in Tables \@ref(tab:cond-table) and
+\@ref(tab:scale-metrics). Since $\hat c > 0$, `St-MSh` also flips sign in exactly the same windows as the sample mean.
+
+An interesting observation is that because the scalar $\hat c$ is
+re-estimated each window the stitched `MV_StMSh` series is not a global
+rescaling of `MV_Sample` as each month is scaled by a different constant. The
+per-window Sharpe statistics are identical, but the stitched Sharpe in Table
+\@ref(tab:scale-metrics) differs slightly, and every scale-sensitive metric
+(leverage, volatility, certainty-equivalent) shrinks by roughly $\hat c$ for the
+mean-variance portfolio. The other estimators avoid this equivalence
+because they change the direction. `D-MSh` rescales each asset differently, and
+the linear-shrinkage estimators mix $\bar X$ with a nonzero target. `St-MSh`'s
+shrinkage is visible in the scale-sensitive mean-variance metrics, but it is
+invisible to any scale-invariant evaluation of a linear portfolio rule.
+
+## Covariance conditioning: `cov1Para` vs sample covariance {#apx-cond}
+
+With the mean estimators and portfolio construction held fixed, replacing
+`cov1Para` by the sample covariance sharply worsens conditioning and
+implementability. Averaged across windows, the condition number of the
+covariance estimate is
+`r fmt(cond_mean_shrink, 1)` under `cov1Para` against
+`r fmt(cond_mean_sample, 1)` under the sample covariance, with medians of
+`r fmt(cond_med_shrink, 1)` and `r fmt(cond_med_sample, 1)`. Table
+\@ref(tab:cond-table) shows, for each mean estimator, the average gross
+leverage and turnover of the tangency portfolio under each covariance estimator,
+along with its Sharpe ratio on the stitched out-of-sample series.
+
+```{r cond-table}
+kbl_cond <- cond_tab[, c(
+  "GrossLev_cov1Para", "Turnover_cov1Para", "OOS_Sharpe_cov1Para",
+  "GrossLev_sample", "Turnover_sample", "OOS_Sharpe_sample"
+)]
+kable(kbl_cond,
+  digits = 2, booktabs = TRUE,
+  caption = "Tangency-portfolio implementability by covariance estimator. Gross leverage and turnover are averaged across windows, and Sharpe is computed on the stitched out-of-sample series.",
+  col.names = c("Gross lev.", "Turnover", "Sharpe", "Gross lev.", "Turnover", "Sharpe")
+) |>
+  kable_styling(full_width = FALSE, position = "center", latex_options = "hold_position") |>
+  add_header_above(c(" " = 1, "cov1Para" = 3, "Sample covariance" = 3))
+```
+
+```{=latex}
+% \newpage
+```
+
+## Scale-sensitive out-of-sample metrics {#apx-scale}
+
+The annualised Sharpe ratio is invariant to positive rescaling of the weight
+vector, so it cannot distinguish portfolios that differ sharply in leverage,
+trading and exposure. However these are the features that determine whether a strategy can be run. Table \@ref(tab:scale-metrics) shows metrics that respond
+to scale computed on the stitched out-of-sample series, with the `r n_windows`
+test windows concatenated in time order. As such, the Sharpe ratios differ
+from the per-window average shown in Table \@ref(tab:a-headline-sharpe).
+
+The certainty-equivalent (CE) return is the risk-adjusted return an investor
+with risk aversion $\gamma$ would trade the strategy for, computed as the
+annualised excess return minus $\tfrac{\gamma}{2}$ times the annualised
+variance. This uses the same $\gamma = 1$ as the portfolio construction
+(Section \@ref(a3)). Gross leverage (the sum of absolute weights) and
+maximum absolute weight are averaged across windows. Turnover is the change in
+weights per monthly rebalance. The net-short count is the number of windows in
+which the tangency normaliser $c = \mathbf 1^\top\Sigma^{-1}\hat\mu$ is
+negative.
+
+Turnover compares target weights at consecutive rebalances and does not account
+for the drift of holdings by intervening returns. This approximates true
+trading volume and because the same simplification applies to every strategy,
+cross-strategy comparisons are unaffected.
+
+
+```{r scale-metrics}
+# options(knitr.kable.NA = "---")
+# best_sr <- tab_full$Sharpe == max(tab_full$Sharpe, na.rm = TRUE)
+# best_ce <- tab_full$CE == max(tab_full$CE, na.rm = TRUE)
+# kable(tab_full,
+#   digits = c(2, 2, 2, 1, 1, 2, 1, 0),
+#   format.args = list(big.mark = ","), booktabs = TRUE,
+#   caption = "Scale-sensitive out-of-sample metrics, full period (annualised weekly excess returns, omega = 1). Sharpe is on the stitched OOS series; CE is the realised certainty-equivalent; leverage and max weight are window averages; turnover is per monthly rebalance; net-short counts windows with negative sum(z).",
+#   col.names = c(
+#     "Ann. ex. ret.", "Ann. vol.", "Sharpe", "CE",
+#     "Gross lev.", "Max wt", "Turnover", "Net-short"
+#   ),
+#   linesep = c("\\addlinespace", rep(c("", "\\addlinespace"), length(mean_estimators)))
+# ) |>
+#   kable_styling(
+#     full_width = FALSE, position = "center", font_size = 9,
+#     latex_options = c("scale_down", "hold_position")
+#   ) |>
+#   add_header_above(c(" " = 1, "Performance" = 4, "Implementability" = 4)) |>
+#   column_spec(3, bold = best_sr, color = ifelse(best_sr, "#1b9e77", "black")) |>
+#   column_spec(4, bold = best_ce, color = ifelse(best_ce, "#1b9e77", "black"))
+
+tf <- data.frame(
+  Strategy = sub("^(MV|TP)_", "", rownames(tab_full)),
+  tab_full,
+  row.names = NULL,
+  check.names = FALSE
+)
+
+rank_best <- function(x, highest_is_best = TRUE) {
+  u <- sort(unique(x[!is.na(x)]), decreasing = highest_is_best)
+  match(x, u)
+}
+# Green -> Orange -> Black
+color_top2 <- function(x, highest_is_best = TRUE) {
+  r <- rank_best(x, highest_is_best)
+  col <- rep("black", length(x))
+  col[!is.na(r) & r == 1L] <- "#1b9e77"
+  col[!is.na(r) & r == 2L] <- "#d95f02"
+  col
+}
+bold_top2 <- function(x, highest_is_best = TRUE) {
+  r <- rank_best(x, highest_is_best)
+  !is.na(r) & r <= 2L
+}
+
+style_map <- list(
+  list(col = 2, hi = TRUE), # Ann. excess return
+  list(col = 3, hi = FALSE), # Ann. volatility
+  list(col = 4, hi = TRUE), # Sharpe
+  list(col = 5, hi = TRUE), # Certainty equivalent
+  list(col = 6, hi = FALSE), # Gross leverage
+  list(col = 7, hi = FALSE), # Max weight
+  list(col = 8, hi = FALSE) # Turnover
+  # list(col = 9, hi = FALSE) # Net-short count
+)
+
+# best_sr <- tf$Sharpe == max(tf$Sharpe, na.rm = TRUE)
+# best_ce <- tf$CE     == max(tf$CE,     na.rm = TRUE)
+
+kt <- kable(tf,
+  digits = c(0, 3, 3, 3, 1, 1, 2, 1, 0), # leading 0 for Strategy
+  format.args = list(big.mark = ","), booktabs = TRUE, row.names = FALSE,
+  caption = "Scale-sensitive out-of-sample metrics over the full period, using annualised weekly excess returns with risk aversion gamma = 1. The Sharpe ratio is computed on the stitched out-of-sample series. The certainty-equivalent return is the annualised excess return minus half the annualised variance. Gross leverage (sum of absolute weights) and maximum absolute weight are averaged across windows. Turnover is measured per monthly rebalance. The net-short count is the number of windows with a negative tangency normaliser. Within each column, the best and second-best values are shown in green and orange respectively.",
+  col.names = c(
+    "Strategy", "Ann. ex. ret.", "Ann. vol.", "Sharpe", "Cert. equiv.",
+    "Gross lev.", "Max wt", "Turnover", "Net-short"
+  ),
+  linesep = ""
+) |>
+  kable_styling(
+    full_width = FALSE, position = "center", font_size = 9,
+    latex_options = c("scale_down", "hold_position")
+  ) |>
+  add_header_above(c(" " = 1, "Performance" = 4, "Implementability" = 4)) |>
+  pack_rows(index = c(
+    "Benchmark" = 1,
+    "Mean-variance portfolio" = length(est_order),
+    "Tangency portfolio" = length(est_order)
+  ))
+  # column_spec(4, bold = best_sr, color = ifelse(best_sr, "#1b9e77", "black")) |>
+  # column_spec(5, bold = best_ce, color = ifelse(best_ce, "#1b9e77", "black"))
+
+for (s in style_map) {
+  x  <- tf[[s$col]]
+  kt <- column_spec(kt, s$col, bold = bold_top2(x, s$hi), color = color_top2(x, s$hi))
+}
+kt
+```
+
+## Tangency sign flips {#apx-inout}
+
+The tangency weights are $\Sigma^{-1}\hat\mu / c$ with 
+$c = \mathbf 1^\top\Sigma^{-1}\hat\mu$. When $c$ is negative the construction
+returns the minimum-Sharpe portfolio rather than the maximum-Sharpe one, so the
+in-sample Sharpe ratio becomes large and negative. Counting these net-short
+windows is a useful diagnostic, because they tend to cluster in high-volatility
+regimes, exactly where the equal-weighted portfolio does well by never
+optimising. Table \@ref(tab:inout-table) shows the share of windows that flip
+and the average out-of-sample Sharpe in flipped versus non-flipped windows, for
+each estimator. 
+
+Figure \@ref(fig:inout-fig) plots in-sample against out-of-sample Sharpe, with
+net-short windows highlighted. Out-of-sample Sharpe sits in a narrow band around
+zero across the full in-sample range, with no upward trend, showing that a
+strong in-sample Sharpe does not translate into a strong out-of-sample one. The flip windows separate the estimators by design. For the
+mean-shrinkage estimators (`St-MSh`, `D-MSh`, `O-LSh`, `T-LSh`) and `Jorion`,
+the flips concentrate at negative in-sample Sharpe, so these methods turn
+net-short mainly when recent performance was poor. `Wang` and `BOP` behave in
+the opposite way, flipping at positive in-sample Sharpe, and `BOP` flips far
+more often than any other estimator 
+(`r fmt(inout_summary$"Windows flipped (%)"[inout_summary$estimator == "BOP"],1)`% 
+of windows against 
+`r fmt(inout_summary$"Windows flipped (%)"[inout_summary$estimator == "Wang"],1)`%
+for `Wang`). This split aligns with the loss functions for each estimator
+(Appendix \@ref(apx-method-mean-vec-estimators)). Estimators that shrink toward
+the grand mean under mean-squared error flip in one regime, and the two that
+shrink toward the unit vector under the invariant loss flip in the other.
+
+As before the Sample and `St-MSh` rows coincide exactly. As $\hat c > 0$, the sign
+of $c = \mathbf 1^\top\Sigma^{-1}\hat\mu$ is unchanged by the shrinkage, so the
+two estimators flip in the same windows (Appendix
+\@ref(apx-stmsh-vs-sample)).
+
+```{r inout-table}
+kable(inout_summary,
+  digits = 2, booktabs = TRUE, 
+  caption = "Tangency sign-flip diagnostic by estimator: share of net-short windows and average out-of-sample Sharpe in flipped versus non-flipped windows.",
+  col.names = c(
+    "Estimator", "Windows flipped (\\%)",
+    "OOS Sharpe (flipped)", "OOS Sharpe (not flipped)"
+  ),
+  escape = FALSE
+) |>
+  kable_styling(full_width = FALSE, position = "center", latex_options = "hold_position")
+```
+
+```{r inout-fig, fig.cap="In-sample versus out-of-sample annualised Sharpe (tangency portfolios), by estimator. Net-short windows (sign flips) are highlighted.", fig.width=6.5, fig.height=4.5}
+ggplot(diag_df, aes(IS, OOS, color = flip)) +
+  geom_hline(yintercept = 0, linewidth = 0.3) +
+  geom_vline(xintercept = 0, linewidth = 0.3) +
+  geom_point(alpha = 0.5, size = 1) +
+  facet_wrap(~estimator) +
+  labs(x = "In-sample Sharpe", y = "Out-of-sample Sharpe", color = "Sign flip") +
+  theme_minimal()
+```
+
+## The near-zero normaliser {#apx-pathology}
+
+Distinct from the sign flip, the tangency weights explode when $c$ passes close
+to zero rather than merely reversing. Tangency gross leverage in window $k$ is
+$\sum_i |z_i| / |c_k|$, so as $c_k \to 0$ the leverage diverges and every
+moment-based metric (return, volatility, certainty-equivalent, leverage,
+turnover) is dominated by that one window. The closest approach to zero across
+windows is smallest for `D-MSh`. 
+At window `r k_bad` (`r format(date_bad, "%d %B %Y")`),
+$c \approx `r formatC(sumz_bad, format = "f", digits = 4)`$ drives `TP_DMSh`
+gross leverage to `r fmt(lev_bad, 0)`. Table
+\@ref(tab:pathology-table) lists the minimum $|c|$ per estimator.
+
+```{r pathology-table}
+patho <- data.frame(
+  Estimator = est_order,
+  `Min |c|` = round(as.numeric(min_sumz[est_order]), 4),
+  check.names = FALSE
+)
+kable(patho,
+  row.names = FALSE, booktabs = TRUE,
+  caption = "Closest approach of $c = \\mathbf{1}^\\top \\Sigma^{-1}\\hat\\mu$ to zero, by estimator (smaller means a more unstable tangency window)."
+) |>
+  kable_styling(full_width = FALSE, position = "center", latex_options = "hold_position")
+```
+
+## Sample composition and the full universe {#apx-stocks}
+
+Figure \@ref(fig:apx-a-stock-plots) shows how our sample compares to the wider context of the full estimation universe. The top panel compares the equal-weighted cumulative
+return of the `r no_companies` Group `r group_num` stocks against the full
+`r ncol(returns_all)`-stock universe, both re-based to 1 and shown on a
+log axis. The
+full-universe series is an equal-weighted proxy for the market rather than the
+cap-weighted S&P 500. The bottom panel decomposes the full universe into its
+GICS sectors on the same basis. The shaded bands mark the financial-crisis and
+pandemic sub-periods. The sector paths show why our sample's light Technology
+weighting muted its pandemic Sharpe ratios. The technology-led sectors that
+compounded fastest after 2020 are exactly the ones our draw underweights
+(Figure \@ref(fig:gics-fig)). 
+
+The full list of our `r no_companies` companies, grouped by GICS sector, is
+given in Table \@ref(tab:stocks-table).
+
+```{=latex}
+\newpage
+```
+
+```{r apx-a-stock-plots, fig.cap = paste0("Rebased equal-weighted cumulative returns, ",format(min(dates), "%B %Y"), " to ", format(max(dates), "%B %Y"),", on a log axis. Top: the ", no_companies, " Group ", group_num," stocks against the full ", ncol(returns_all),"-stock universe. Bottom: the full universe split by GICS sector. ", "Shaded bands mark the financial-crisis and pandemic sub-periods."), fig.width=6.5, fig.height=7.5}
+regimes <- data.frame(
+  Regime = c("Financial crisis", "Pandemic"),
+  xmin = c(fc_lo, pd_lo),
+  xmax = c(fc_hi, pd_hi)
+)
+
+cum_df <- data.frame(
+  Date = dates,
+  `Group 12 (100)` = cumprod(1 + rowMeans(returns100)),
+  `Full universe (441)` = cumprod(1 + rowMeans(returns_all)),
+  check.names = FALSE
+)
+
+long_cum <- pivot_longer(
+  cum_df, -Date,
+  names_to = "Universe", values_to = "Growth"
+)
+ylims <- range(long_cum$Growth, na.rm = TRUE)
+
+p1 <- ggplot(
+  pivot_longer(cum_df, -Date, names_to = "Universe", values_to = "Growth"),
+  aes(Date, Growth, color = Universe)
+) +
+  geom_rect(
+    data = regimes,
+    inherit.aes = FALSE,
+    # manually tweaked
+    aes(
+      xmin = xmin, xmax = xmax, ymin = ylims[1], ymax = ylims[2], fill = Regime
+    ),
+    alpha = 0.08
+  ) +
+  scale_fill_manual(
+    breaks = c("Financial crisis", "Pandemic"),
+    values = c("Financial crisis" = "red", "Pandemic" = "blue")
+  ) +
+  geom_line() +
+  scale_y_log10() +
+  labs(y = "Rebased values (log $)", x = NULL) +
+  theme_minimal() +
+  theme(legend.position = "top", legend.title = element_blank()) +
+  guides(color = guide_legend(order = 1), fill = guide_legend(order = 2))
+
+sec_map <- setNames(gics[["GICS Sector Name"]], gics$DA441_column_name)
+sectors <- sec_map[colnames(returns_all)]
+stopifnot(!anyNA(sectors))
+
+sect_cum <- sapply(sort(unique(sectors)), function(s) {
+  cumprod(1 + rowMeans(returns_all[, sectors == s, drop = FALSE]))
+})
+
+sect_df <- data.frame(Date = dates, sect_cum, check.names = FALSE)
+
+p2 <- ggplot(
+  pivot_longer(sect_df, -Date, names_to = "Sector", values_to = "Growth"),
+  aes(Date, Growth, color = Sector)
+) +
+  geom_line(linewidth = 0.5) +
+  scale_y_log10() +
+  labs(y = "Rebased values (log $)", x = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  guides(color = guide_legend(nrow = 3))
+
+p1 / p2
+```
+
+```{r stocks-table}
+stocks_tbl <- gics[
+  gics$DA441_column_name %in% selected,
+  c("company_ticker", "company_name", "GICS Sector Name")
+]
+stocks_tbl <- stocks_tbl[order(stocks_tbl[["GICS Sector Name"]], stocks_tbl$company_ticker), ]
+colnames(stocks_tbl) <- c("Ticker", "Company", "GICS Sector")
+idx <- rle(as.character(stocks_tbl$`GICS Sector`)) # sector run-lengths (table is sector-sorted)
+kable(stocks_tbl[, c("Ticker", "Company")],
+  booktabs = TRUE, longtable = TRUE,
+  caption = "Our (Group 12's) 100 sampled companies, grouped by GICS sector."
+) |>
+  kable_styling(full_width = FALSE, font_size = 9, latex_options = c("repeat_header")) |>
+  pack_rows(index = setNames(idx$lengths, idx$values))
+```
+
+```{=latex}
+\clearpage
+\newpage
+```
+
+# Coursework 2: Supplementary analyses {#apd-b}
+
+## Robustness checks {#apx-b-robustness}
+
+```{r apx-b-helpers, include=FALSE}
+# Lightweight OOS check used by the sensitivity analyses: a single 5-fold CV
+# of the plain Gamma GLM (glm2) under a given preprocessing configuration.
+# Fixed seed so all configurations face identical fold partitions.
+quick_cv_glm <- function(veh_cap = 9, bm_cap = 150, k_smooth = 20,
+                         driv_df = 3, veh_df = 3, seed = 1) {
+  # Formula must match the spline df of the configuration
+  sp_terms <- c(paste0("DrivAge_Sp", seq_len(driv_df)),
+                paste0("VehAge_Sp",  seq_len(veh_df)))
+  fml <- reformulate(c("BonusMalus_Log", "VehPower_Log", "Density_Log",
+                       sp_terms, "VehGas", "TE_Region", "TE_Area",
+                       "TE_VehBrand"), response = "Severity")
+  set.seed(seed)
+  folds <- sample(rep(1:5, length.out = nrow(data_sev)))
+  out <- sapply(1:5, function(f) {
+    fe <- build_features(data_sev[folds != f, ], data_sev[folds == f, ],
+                         veh_cap = veh_cap, bm_cap = bm_cap,
+                         driv_df = driv_df, veh_df = veh_df,
+                         k_smooth = k_smooth)
+    Xtr <- model.matrix(fml, fe$train); Xte <- model.matrix(fml, fe$test)
+    m <- glm.fit2(x = Xtr, y = fe$train$Severity, weights = fe$train$ClaimNb,
+                  family = family_type, control = control_list)
+    cf <- m$coefficients; cf[is.na(cf)] <- 0
+    mu <- exp(as.numeric(Xte %*% cf))
+    cap95 <- quantile(fe$train$Severity, 0.95)
+    c(RMSE_W95 = calc_rmse_win(fe$test$Severity, mu, cap95),
+      Gini = NormalisedWeightedGini(fe$test$Severity, fe$test$ClaimNb, mu),
+      AE = sum(fe$test$Severity) / sum(mu))
+  })
+  rowMeans(out)
+}
+
+# Full-data Gamma GLM fit for AIC comparisons (glm2 wrapper returns a glm
+# object, so AIC() is available; glm.fit2 alone does not report AIC).
+fit_full_glm <- function(veh_cap = 9, bm_cap = 150, k_smooth = 20,
+                         driv_df = 3, veh_df = 3, standardise = TRUE) {
+  sp_terms <- c(paste0("DrivAge_Sp", seq_len(driv_df)),
+                paste0("VehAge_Sp",  seq_len(veh_df)))
+  fml <- reformulate(c("BonusMalus_Log", "VehPower_Log", "Density_Log",
+                       sp_terms, "VehGas", "TE_Region", "TE_Area",
+                       "TE_VehBrand"), response = "Severity")
+  fe <- build_features(data_sev, NULL, veh_cap = veh_cap, bm_cap = bm_cap,
+                       driv_df = driv_df, veh_df = veh_df,
+                       k_smooth = k_smooth, standardise = standardise)
+  glm2::glm2(fml, data = fe$train, family = family_type, weights = ClaimNb,
+             control = glm.control(maxit = 250, epsilon = 1e-6))
+}
+```
+
+### Sensitivity to the VehPower and BonusMalus caps {#apx-b-caps}
+
+The preprocessing caps `VehPower` at 9 and `BonusMalus` at 150 before the log
+transform. Both cut-offs are varied here with all other choices held constant.
+The results are evaluated using the full-data Gamma GLM's Akaike information
+criterion (AIC) alongside a single 5-fold CV of winsorised RMSE (95%),
+normalised Gini and the AE ratio.
+
+```{r apx-b-caps-run, include=FALSE}
+veh_grid <- c(6, 9, 12, Inf)
+bm_grid <- c(100, 150, 200, Inf)
+caps_veh <- t(sapply(veh_grid, function(vc) {
+  c(AIC = AIC(fit_full_glm(veh_cap = vc)), quick_cv_glm(veh_cap = vc))
+}))
+caps_bm <- t(sapply(bm_grid, function(bc) {
+  c(AIC = AIC(fit_full_glm(bm_cap = bc)), quick_cv_glm(bm_cap = bc))
+}))
+caps_tab <- data.frame(
+  Parameter = c(
+    rep("VehPower cap", length(veh_grid)),
+    rep("BonusMalus cap", length(bm_grid))
+  ),
+  Cap = c(
+    ifelse(is.finite(veh_grid), veh_grid, "none"),
+    ifelse(is.finite(bm_grid), bm_grid, "none")
+  ),
+  rbind(caps_veh, caps_bm), check.names = FALSE
+)
+
+# policies the 150 and 100 caps touch
+n_bm_gt150 <- sum(data_sev$BonusMalus > 150)   
+n_bm_gt100 <- sum(data_sev$BonusMalus > 100)  
+```
+
+```{r apx-b-caps-table}
+kable(caps_tab[, -1],
+  row.names = FALSE, booktabs = TRUE,
+  digits = c(NA, 1, 0, 3, 3),
+  col.names = c(
+    "Cap", "AIC (full fit)", "RMSE W95 (CV)",
+    "Gini norm (CV)", "AE (CV)"
+  ),
+  caption = "The effect of VehPower and BonusMalus cut-offs on the Gamma GLM (the values used were 9 and 150 respectively). AIC from the full-data fit; the remaining columns from a single 5-fold CV on a common fold partition."
+) |>
+  kable_styling(
+    full_width = FALSE, position = "center",
+    latex_options = "hold_position"
+  ) |>
+  pack_rows("VehPower cap (BonusMalus = 150)", 1, length(veh_grid)) |>
+  pack_rows(
+    "BonusMalus cap (VehPower = 9)", length(veh_grid) + 1,
+    length(veh_grid) + length(bm_grid)
+  )
+```
+
+As shown in Table \@ref(tab:apx-b-caps-table), across all eight configurations
+the AIC spans barely a single unit
+(`r fmt(min(caps_tab$AIC), 1)` to `r fmt(max(caps_tab$AIC), 1)`),
+winsorised RMSE moves by 
+`r round(max(caps_tab$RMSE_W95) - min(caps_tab$RMSE_W95))`
+euros
+(€`r round(min(caps_tab$RMSE_W95))` to €`r round(max(caps_tab$RMSE_W95))`), and the
+AE ratio is effectively constant (`r fmt(min(caps_tab$AE), 3)` to
+`r fmt(max(caps_tab$AE), 3)`). 
+This shows that the defaults are neither
+favoured nor penalised and the model is insensitive to where these two
+variables are truncated. The `BonusMalus` cap matters less than the
+`VehPower` cap, with caps of 150, 200 and "none" resulting in identical figures. This is because no policy (in our `r fmt(n_pol, 0)` policies) carries a `BonusMalus` score above 150, so raising or removing the ceiling does not change the model. The only visible movement comes from the tighter cap of 100, which touches the `r fmt(n_bm_gt100, 0)` policies scoring above it and nudges RMSE up to `r round(caps_tab$RMSE_W95[caps_tab$Cap == "100"])`
+(versus `r round(caps_tab$RMSE_W95[caps_tab$Cap == "150"])` at the default). Scores above 100 are the malus-loaded, higher-risk policies, so cutting at 100 compresses real differentiation among the worst drivers. The
+normalised Gini stays negative throughout, consistent with the finding in \@ref(b1-raw). Policy-level severity carries no rankable out-of-sample signal at this sample size so its small movements across the grid are not informative.
+
+### Spline flexibility: three versus four degrees of freedom {#apx-b-splines}
+
+
+```{r apx-b-splines-run, include=FALSE}
+sp_grid <- expand.grid(driv_df = c(3, 4), veh_df = c(3, 4))
+sp_tab <- cbind(sp_grid, t(apply(sp_grid, 1, function(g) {
+  m <- fit_full_glm(driv_df = g["driv_df"], veh_df = g["veh_df"])
+  c(
+    AIC = AIC(m), Deviance = deviance(m), p = length(coef(m)),
+    quick_cv_glm(driv_df = g["driv_df"], veh_df = g["veh_df"])
+  )
+})))
+```
+
+```{r apx-b-splines-table}
+kable(sp_tab,
+  row.names = FALSE, booktabs = TRUE,
+  align = "c",
+  digits = c(0, 0, 1, 1, 0, 0, 3, 3),
+  col.names = c(
+    "DrivAge", "VehAge", "AIC", "Deviance", "Params",
+    "RMSE W95 (CV)", "Gini norm (CV)", "AE (CV)"
+  ),
+  caption = "Comparison of spline flexibilities for driver and vehicle age, evaluated via full-data AIC, deviance, and 5-fold cross-validation metrics."
+) |>
+  kable_styling(
+    full_width = FALSE, position = "center",
+    latex_options = "hold_position"
+  ) |>
+  add_header_above(c("Degrees of freedom" = 2, " " = 6))
+```
+
+
+Increasing the natural-spline degrees of freedom for `DrivAge` and `VehAge` from
+3 to 4 adds one internal knot, and one parameter, per variable. As deviance
+alone fails to account for overfitting, we opted to primarily evaluate these
+models using AIC to penalise the additional parameters, paired with 5-fold
+cross-validation to assess true out-of-sample performance (Table 
+\@ref(tab:apx-b-splines-table)).
+
+Adding a knot to `DrivAge` (while holding `VehAge` at 3) yields no benefit. The deviance remains completely unchanged at `r fmt(sp_tab$Deviance[sp_tab$driv_df==4 & sp_tab$veh_df==3], 1)`. As a result the AIC increases strictly due to the parameter penalty (from `r fmt(sp_tab$AIC[sp_tab$driv_df==3 & sp_tab$veh_df==3], 1)` to `r fmt(sp_tab$AIC[sp_tab$driv_df==4 & sp_tab$veh_df==3], 1)`), and the winsorised RMSE worsens from `r round(sp_tab$RMSE_W95[sp_tab$driv_df==3 & sp_tab$veh_df==3])` to `r round(sp_tab$RMSE_W95[sp_tab$driv_df==4 & sp_tab$veh_df==3])`. This indicates the extra driver-age flexibility is simply fitting noise. 
+
+Adding a knot to `VehAge` in isolation does improve the model. Deviance falls to `r fmt(sp_tab$Deviance[sp_tab$driv_df==3 & sp_tab$veh_df==4], 1)`, AIC decreases by roughly nine units (to `r fmt(sp_tab$AIC[sp_tab$driv_df==3 & sp_tab$veh_df==4], 1)`), and winsorised RMSE improves to `r round(sp_tab$RMSE_W95[sp_tab$driv_df==3 & sp_tab$veh_df==4])`. 
+However this performance gain is modest (approximately a `r fmt(100 * (1 - sp_tab$RMSE_W95[sp_tab$driv_df==3 & sp_tab$veh_df==4] / sp_tab$RMSE_W95[sp_tab$driv_df==3 & sp_tab$veh_df==3]), 1)`% improvement in winsorised RMSE) and serves better as an acknowledged limitation of the current specification rather than a mandate to re-run the full 500-run cross-validation study. The normalised Gini coefficient also remains negative across all configurations, showing that the increased flexibility provides no additional out-of-sample ranking power. We therefore retain three degrees of freedom for both variables, matching the specification of the released practice code and @Asimit2025GLMsolsviaShrinkage, and note the additional `VehAge` knot as a candidate refinement for a larger study.
+
+<!-- Despite this, we retain three degrees of freedom for both variables in the main analysis. This ensures symmetry between the age effects and aligns with the baseline specification established by @Asimit2025GLMsolsviaShrinkage.  -->
+
+### Sensitivity to the target-encoding smoother $\kappa$ {#apx-b-ksmooth}
+
+```{r apx-b-ksmooth-run, include=FALSE}
+k_grid <- c(5, 10, 20, 50, 100)
+ks_tab <- data.frame(
+  kappa = k_grid,
+  t(sapply(k_grid, function(k) quick_cv_glm(k_smooth = k))),
+  check.names = FALSE
+)
+```
+
+The credibility weight in the target encoding is defined as 
+$$
+\lambda = \frac{n_{\text{group}}}{n_{\text{group}} + \kappa}
+$$
+with a default parameter of
+$\kappa = 20$. A smaller $\kappa$ places more trust in sparse group means
+(risking overfitting), whereas a larger $\kappa$ shrinks every group toward the
+global mean (risking underfitting). Because in-sample fit inherently rewards a
+smaller $\kappa$, we evaluate the comparison entirely out-of-sample.
+
+As shown in Table \@ref(tab:apx-b-ksmooth-table), out-of-sample performance
+remains essentially flat across all values of $\kappa$ with no single value performing materially better than the default. Winsorised RMSE varies
+by only a couple of euros across the entire grid (from
+`r round(min(ks_tab$RMSE_W95))` at $\kappa = 5$ to 
+`r round(max(ks_tab$RMSE_W95))` at $\kappa = 100$), and the AE ratio is
+virtually unchanged (ranging from `r fmt(min(ks_tab$AE), 3)` to 
+`r fmt(max(ks_tab$AE), 3)`).  Interestingly, a small $\kappa$ does not lead to
+overfitting in this instance. The lowest winsorised RMSE occurs at the minimum
+tested value of $\kappa = 5$ suggesting that trusting sparse brand or region
+cells does not penalise the model at the current sample size. The only monotonic
+trend appears in the normalised Gini coefficient, which becomes steadily less
+negative as $\kappa$ increases (from `r fmt(ks_tab$Gini[ks_tab$kappa==5], 3)` to
+`r fmt(ks_tab$Gini[ks_tab$kappa==100], 3)`). However, since every recorded value
+remains negative, this trend merely reflects the encoding being pulled more
+aggressively toward the global mean, rather than representing a genuine
+improvement in ranking power. 
+
+```{r apx-b-ksmooth-table}
+kable(ks_tab,
+  row.names = FALSE, booktabs = TRUE, digits = c(0, 0, 3, 3),
+  col.names = c("$\\kappa$", "RMSE W95 (CV)", "Gini norm (CV)", "AE (CV)"),
+  escape = FALSE,
+  caption = "Evaluating the Gamma GLM's sensitivity to the target-encoding smoothing parameter $\\kappa$. Performance is measured via a single 5-fold cross-validation on a shared partition, with 20 serving as the default value."
+) |>
+  kable_styling(
+    full_width = FALSE, position = "center",
+    latex_options = "hold_position"
+  )
+```
+
+### Standardisation {#apx-b-scaling}
+
+For `glm2`, `savvyGLM` and `glmnet` the fitted values depend on the data only
+through the linear predictor $x_i^\top\beta$. Scaling a column by $s$ rescales
+its coefficient by $1/s$, leaving $\hat\mu_i$ unchanged. We note also that
+`glmnet` applies standardisation internally by default, ensuring that
+penalisation is applied on a common scale regardless of the input format.
+
+```{r apx-b-scaling-check, echo=FALSE}
+m_scaled <- fit_full_glm(standardise = TRUE)
+m_raw    <- fit_full_glm(standardise = FALSE)
+# max(abs(fitted(m_scaled) - fitted(m_raw))) 
+```
+
+To investigate this empirically, the full-data Gamma GLM was fitted with and
+without standardisation. The maximum absolute difference across all 
+`r fmt(n_pol, 0)` fitted severities is approximately 
+`r formatC(max(abs(fitted(m_scaled) - fitted(m_raw))), format = "e", digits = 1)`
+(a negligible discrepancy attributable to floating-point rounding error). This
+confirms that standardisation in this context serves as a presentational
+convenience, retained to mirror the released practice code, rather than a
+substantive modelling choice that affects the results.
+
+## Convergence and computational notes {#apx-b-convergence}
+
+As an observational note, we encountered two types of warnings during the 
+`r fmt(n_runs, 0)`-run loop. Both originate from designed safeguards within the
+fitting algorithms rather than from data anomalies or implementation errors.
+Neither invalidates the reported results, but they are of technical interest and
+are described briefly below for completeness, alongside our interpretation.
+
+glmnet: algorithm did not converge
+:   This appears when `glmnet` is asked to fit a Gamma model with a log link.
+    For each candidate penalty strength, `glmnet` runs a small iterative fitting
+    routine that is allowed up to 25 passes by default. With heavy-tailed
+    severity data, the fits at the very lightly penalised end of the range
+    occasionally need more than 25 passes, so they stop early and report it.
+    This does not affect the final model. The penalty is chosen by
+    cross-validation, and a fit that has not settled scores poorly and is passed
+    over. We checked that the penalty finally selected never comes from that
+    unsettled end of the range. 
+
+savvyGLM / glm.fit2: step size truncated / cannot correct step size
+:   The shrinkage GLMs use a fitting routine (glm.fit2)
+    built around a simple safety check. At each step, if the proposed update
+    would make the fit worse rather than better, the update is halved and tried
+    again until it improves, and each time this happens a message is logged. 
+    This is common with a Gamma/log model when the predictors are correlated.
+    The "cannot correct step size" message means the routine used up its allowed
+    halvings at that step and carried on from the best result it had so far.
+    What actually matters is whether the fit settles in the end, and we record
+    that for every fit. Across the `r fmt(n_runs, 0)` runs, the outcome is
+    summarised in the table below. The number of passes stays far below the
+    ceiling of 250, ranging from 
+    `r fmt(mean(final_results$NoIt[final_results$Model == "SR"], na.rm = TRUE), 1)`
+    for SR to 
+    `r fmt(mean(final_results$NoIt[final_results$Model == "GLM2"], na.rm = TRUE), 1)` for GLM2, and every fit in this family (GLM2 and the six
+    savvyGLM estimators) settles in all `r fmt(n_runs, 0)` runs. The glmnet
+    models (RR and EN) do not expose a comparable per-fit flag, shown as a dash
+    in the table, and their iteration counts measure coordinate-descent passes,
+    so neither column is compared with the IRLS family.
+
+
+```{r apx-b-conv-table}
+noit_tab <- aggregate(NoIt ~ Model, final_results, mean, na.rm = TRUE)
+conv_pct <- aggregate(final_results$Converged,
+  by = list(Model = final_results$Model),
+  FUN = function(x) {
+    if (all(is.na(x))) {
+      NA_real_
+    } else {
+      100 * mean(x, na.rm = TRUE)
+    }
+  }
+)
+names(conv_pct)[2] <- "Converged"
+conv_kbl <- merge(conv_pct, noit_tab, by = "Model", all = TRUE)
+conv_kbl <- conv_kbl[match(model_names, conv_kbl$Model), ]
+kable(conv_kbl,
+  row.names = FALSE, booktabs = TRUE, digits = c(NA, 1, 1),
+  col.names = c("Model", "Converged (\\% of runs)", "Mean NoIt"),
+  escape = FALSE,
+  caption = paste0(
+    "Convergence across the ", fmt(n_runs, 0), " evaluation runs. glmnet does not expose a per-fit convergence flag, shown as a dash. Its NoIt column counts coordinate-descent passes rather than IRLS iterations, so the two are not directly comparable."
+  )
+) |>
+  kable_styling(
+    full_width = FALSE, position = "center",
+    latex_options = "hold_position"
+  )
+```
+
+
+```{=latex}
+\clearpage
+\newpage
+```
+
+# Interactive R Shiny dashboard {#apd-dashboard}
+
+Since the rolling-window analysis in Part A depends on several choices that were
+fixed in the report (e.g., the group seed, the sample size, the training/testing
+window lengths, the risk-aversion parameter and the covariance estimator) a
+natural question is how sensitive the conclusions are to those choices. Rather
+than re-rendering the R Markdown document for each combination, we developed an
+interactive R Shiny dashboard that wraps the same estimator code
+(`All_eight_shrinkage_estimators.R`, `cov1Para.R`) and rolling-window engine
+used in the report, hosted on https://www.shinyapps.io/. The dashboard is
+available via:
+
+- https://3enji-apps.shinyapps.io/smm069-g12-part-a-dashboard/
+
+```{r appendix-dashboard-1, echo=FALSE, purl=FALSE, out.width="100%", fig.cap="Our R Shiny dashboard. Left: the Sample \\& GICS tab, with the four analysis tabs highlighted. Right: the rolling-window controls (training, testing and step lengths, risk aversion, covariance estimator and mean-vector estimators) and the button that triggers the rolling analysis."}
+knitr::include_graphics("fig/apx-dashboard-01.png")
+```
+
+Figure \@ref(fig:appendix-dashboard-1) shows the R Shiny interface with the
+report's default settings (group 12, 100 companies). The dashboard is organised
+into four analysis tabs (Sample & GICS, Cumulative growth, Rolling performance,
+and Implementability). Each tab has the same sidebar of rolling-window controls:
+the training window, testing window and step (in weeks), the risk-aversion
+parameter $\gamma$, the covariance estimator (Ledoit–Wolf `cov1Para` or the
+sample covariance), and checkboxes to include or exclude any of the eight
+mean-vector estimators.
+
+The sample-size slider is capped at 80% of the training window because several
+mean estimators (e.g. `Jorion`) invert the sample covariance internally. The
+sample covariance is exactly singular for $p \ge n$ and numerically unusable
+well before that, so the cap applies even when `cov1Para` supplies the
+portfolio-weight covariance. We also added a comparison switch that overlays a second group's stocks in the first two tabs.
+
+The GICS and cumulative-growth tabs update instantly as the sample changes and
+the rolling analysis is gated behind a button. Figure
+\@ref(fig:appendix-dashboard-2) shows two of the interactive outputs. All plots
+are interactive and rendered with `plotly`. A strategy picker in the Rolling
+performance tab allows any subset of the mean–variance, tangency and
+equal-weighted portfolios to be compared window by window. A summary table
+reports the mean and standard deviation of per-window Sharpe ratios for the full
+period and both sub-periods.
+
+```{r appendix-dashboard-2, echo=FALSE, purl=FALSE, out.width="100%", fig.cap="Left: the Cumulative growth tab comparing the group sample against the full universe on a log scale. Right: the Rolling performance tab with per-window annualised Sharpe ratios for a user-selected subset of strategies.",  fig.pos="t"}
+knitr::include_graphics("fig/apx-dashboard-02.png")
+```
+
+Future extensions could include exporting run results, allowing for user-defined sub-period boundaries in place of the fixed Bai–Perron dates, and caching of completed runs so that different settings can be compared side by side without
+re-computation.
+
+<!-- BE note: taken out as we are submitting R file separately -->
+<!-- Use: `knitr::purl("filename.rmd", documentation = 0)` to generate r file -->
+<!-- Use: `tools::showNonASCIIfile("filename.rmd")` to debug -->
+<!-- ## R Code Documentation -->
+<!-- ```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}``` -->
+
+
+```{=latex}
+\newpage
+```
+
+# Reproducibility and generative AI declaration
+
+## Reproducibility & accessibility
+
+An accessible HTML version of this report is available via a public GitHub page:
+
+- https://github.com/ytterbiu/smm069-assignment_g12
+
+This report was created in R Markdown. The source code is open source and is
+available via:
+
+- https://ytterbiu.github.io/smm069-assignment_g12/
+
+Changes made to this document were tracked using Git and are also available via
+the same repository (https://github.com/ytterbiu/smm069-assignment_g12/commits/main/). Please note that this commit history reflects
+updates made to the project repository and is not a comprehensive timeline of
+all contributions by group members.
+
+## Generative AI declaration {#apd:genai}
+
+Generative AI (GenAI) tools were used throughout this project to assist with
+project planning, methodological validation, debugging, and the development of
+the supplementary interactive dashboard described in Appendix
+\@ref(apd-dashboard). In practice, these tools functioned as an additional
+technical resource, providing immediate feedback, troubleshooting code, and
+discussing conceptual assumptions.
+
+### Tools used {-}
+
+Google Gemini 3 Pro (Deep Research), Claude (Anthropic) Opus 4.8 & Fable 5.
+
+### Prompts used {-}
+
+The GenAI tools were provided with the coursework task sheet and
+extracts from our R code.
+A non-exhaustive list of prompts used is shown below. We opted to include at
+least one example of each *type* of prompt used, rather than a list of all
+prompts. For example, if we entered the prompts "How can we put two ggplots side
+by side?" and "How to remove grey background on a ggplot", we would include only
+the first of these in the list below, as both relate to plotting issues (and are
+similar to querying with a traditional search engine).
+
+- "...the top of both graphs in R are slightly different. (Pasting R code.) Can
+  this be fixed for the plot area?"
+- "Explain the repeated Sharpe-ratio values..."
+- "Help to identify the key points here"
+- "How can this error be tracked down in an Rmd file? `! Text line contains an
+  invalid character. l.1 ^^@^^@...`"
+- "Are there any issues with this app code? Suggest corrections for any potential bugs or errors within the server side code" 
+
+### Use of GenAI outputs & subsequent revisions {-}
+
+The GenAI tools served as a consultative resource for the group. Notably, the AI
+output:
+
+- Helped debug plotting issues and R Markdown compilation errors.
+- Commented on the structure of R code snippets and the report structure.
+- Assisted with converting draft content between document formats.
+- Reviewed elements of the R Shiny app code, identifying bugs and
+  design issues.
+
+### Changes made {-}
+
+All AI suggestions were critically reviewed and debated by the group before
+implementation. For example:
+
+- While the AI suggested code for complex layouts, the specific aesthetic
+  choices and annotations were manually adjusted to ensure clarity.
+- Where the AI proposed specific interpretations, these were cross-referenced
+  with academic literature (notably @Asimit15062026 and the lecture notes).
+- In the case of the Shiny dashboard, the AI corrections were evaluated
+  against the original code by the group.  Each identified issue was
+  assessed individually.
+- The final R code for implementation was written and debugged by the group,
+  with AI snippets being treated as drafts rather than final solutions.
+
+While GenAI was treated as a collaborator, the final analysis, statistical
+interpretation, and the written content of this report were generated and
+verified by all group members.
+
+```{=latex}
+\newpage
+```
+
+<!-- [^utility-theory]: -->
+<!--     Described in more detail in the appendix (\S\@ref(apd-utility-theory)). -->
+
+<!-- [^utility-skew]: -->
+<!--     This is demonstrated in the appendix (\S\@ref(apd-utility-theory) and Table -->
+<!--     \@ref(tab:exact-utility-table)) where we show that a constant relative risk -->
+<!--     aversion (CRRA) utility function with $\gamma > 0$ mathematically confirms -->
+<!--     that for risk-averse investors asset 1 results in a lower expected utility -->
+<!--     that asset 2. -->
